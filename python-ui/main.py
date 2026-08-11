@@ -42,6 +42,9 @@ class Bioreactor:
         #self.ph = 0
         #self.volume = 0
         self.history = []
+        self.error_count = 0
+        self.last_error = None
+        self.last_valid_data_time = None
 
 # connect to serial ports
 def connect_serial():
