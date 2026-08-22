@@ -1,5 +1,5 @@
 # imports
-from time import time, sleep
+import time
 import serial
 from pathlib import Path
 import csv
@@ -30,17 +30,22 @@ class Bioreactor:
     def __init__(self, reactor_id):
 
         self.id = reactor_id
-
         self.time = 0
+        self.fan_pwm = 0
+        self.fan_rpm = 0
+        self.pump_active = False
+        self.pump_speed = 0
+        self.pump_duration = 0
         self.temp = 0
+        self.temp_target = 0
         self.od = 0
-        self.stir = 0
-        self.heat = 0
-        self.pump = 0
-        self.ph = 7
-        self.volume = 0
-        
+        #self.ph = 0
+        #self.volume = 0
         self.history = []
+        self.error_count = 0
+        self.last_error = None
+        self.last_valid_data_time = None
+        self.connected = True
 
 # connect to serial ports
 def connect_serial():
@@ -53,68 +58,143 @@ def connect_serial():
         except serial.SerialException:
             print(f"Could not connect to {port}")
 
-# read data from serial ports
-def serial_thread():
-    while True:
-        for ser, reactor in zip(connections, reactors):
+# # read data from serial ports
+# def serial_thread():
+#     while True:
+#         for ser, reactor in zip(connections, reactors):
 
-            if ser.in_waiting == 0:
-                continue
+#             if ser.in_waiting == 0:
+#                 continue
 
-            try:
-                line = ser.readline().decode("utf-8").strip() # one json msg
-                data = json.loads(line) # json to python
+#             try:
+#                 line = ser.readline().decode("utf-8").strip() # one json msg
+#                 data = json.loads(line) # json to python
 
-                reactor.temp = data.get("Temperature", reactor.temp)
-                reactor.od = data.get("OD", reactor.od)
-                reactor.ph = data.get("pH", reactor.ph)
-                reactor.volume = data.get("Volume of Liquid", reactor.volume)
+#                 reactor.fan_pwm = data.get("Fan PWM", reactor.fan_pwm)
+#                 reactor.fan_rpm = data.get("Fan RPM", reactor.fan_rpm)
+#                 reactor.pump_active = data.get("Pump Active", reactor.pump_active)
+#                 reactor.pump_speed = data.get("Pump Speed", reactor.pump_speed)
+#                 reactor.pump_duration = data.get("Pump Duration", reactor.pump_duration)
+#                 reactor.temp = data.get("Temperature", reactor.temp)
+#                 reactor.temp_target = data.get("Temperature Target", reactor.temp_target)
+#                 reactor.od = data.get("OD", reactor.od)
+#                 #reactor.ph = data.get("pH", reactor.ph)
+#                 #reactor.volume = data.get("Volume of Liquid", reactor.volume)
 
-                reactor.time = time.time()
+#                 reactor.time = time.time()
 
-                reactor.history.append({
-                    "time": reactor.time,
-                    "temp": reactor.temp,
-                    "od": reactor.od,
-                    "ph": reactor.ph,
-                    "volume": reactor.volume
-                })
+#                 reactor.history.append({
+#                     "time": reactor.time,
+#                     "temp": reactor.temp,
+#                     "od": reactor.od,
+#                     #"ph": reactor.ph, # no pH sensor yet 
+#                     #"volume": reactor.volume # need to write code for volume measurements + addition in arduino before we can add it to the history 
+#                 })
 
-                save_csv(reactor)
+#                 save_csv(reactor)
 
-            except json.JSONDecodeError:
-                print(f"Invalid JSON received: {line}")
+#             except json.JSONDecodeError:
+#                 print(f"Invalid JSON received: {line}")
 
-            except Exception as e:
-                print(f"Error reading reactor {reactor.id}: {e}")
+#             except Exception as e:
+#                 print(f"Error reading reactor {reactor.id}: {e}")
 
-        time.sleep(0.05)
+#         time.sleep(0.05)
         
 # parse data from serial port
 def parse_data(reactor_number, line):
+
+    # Make sure the reactor number is valid
+    if reactor_number < 0 or reactor_number >= len(reactors):
+        print(f"Invalid reactor number: {reactor_number}")
+        return
+
     reactor = reactors[reactor_number]
 
     try:
+        # Check for empty serial message
+        if not line:
+            raise ValueError("Empty serial message")
+
+        # Convert JSON string to Python object
         data = json.loads(line)
 
-        reactor.temp = data.get("Temperature", reactor.temp)
-        reactor.od = data.get("OD", reactor.od)
-        reactor.ph = data.get("pH", reactor.ph)
-        reactor.volume = data.get("Volume of Liquid", reactor.volume)
-        reactor.time = time()
+        # JSON must be a dictionary
+        if not isinstance(data, dict):
+            raise ValueError("JSON data is not a dictionary")
+
+        # Update values only if they are present
+        if "Fan PWM" in data:
+            reactor.fan_pwm = data["Fan PWM"]
+
+        if "Fan RPM" in data:
+            reactor.fan_rpm = data["Fan RPM"]
+
+        if "Pump Active" in data:
+            reactor.pump_active = data["Pump Active"]
+
+        if "Pump Speed" in data:
+            reactor.pump_speed = data["Pump Speed"]
+
+        if "Pump Duration" in data:
+            reactor.pump_duration = data["Pump Duration"]
+
+        if "Temperature" in data:
+            reactor.temp = float(data["Temperature"])
+
+        if "Temperature Target" in data:
+            reactor.temp_target = float(data["Temperature Target"])
+
+        if "OD" in data:
+            reactor.od = float(data["OD"])
+
+        # reactor.ph = data.get("pH", reactor.ph)
+        # reactor.volume = data.get("Volume of Liquid", reactor.volume)
+
+        # Successful reading
+        reactor.time = time.time()
+        reactor.last_valid_data_time = reactor.time
+        reactor.connected = True
+
+        # Reset error state after a successful reading
+        reactor.last_error = None
 
         reactor.history.append({
             "time": reactor.time,
             "temp": reactor.temp,
             "od": reactor.od,
-            "ph": reactor.ph,
-            "volume": reactor.volume
+            # "ph": reactor.ph,
+            # "volume": reactor.volume
         })
 
         save_csv(reactor)
 
     except json.JSONDecodeError:
-        print(f"Invalid JSON from Reactor {reactor.id}: {line}")
+        reactor.error_count += 1
+        reactor.last_error = "Invalid JSON"
+
+        print(
+            f"[ERROR] Reactor {reactor.id}: "
+            f"Invalid JSON: {line}"
+        )
+
+    except (ValueError, TypeError) as e:
+        reactor.error_count += 1
+        reactor.last_error = str(e)
+
+        print(
+            f"[ERROR] Reactor {reactor.id}: "
+            f"Invalid data: {e} | Received: {line}"
+        )
+
+    except Exception as e:
+        reactor.error_count += 1
+        reactor.last_error = str(e)
+
+        print(
+            f"[ERROR] Reactor {reactor.id}: "
+            f"Unexpected error: {e}"
+        )
 
 # send command to bioreactor via serial port
 def send_command(reactor_number,
@@ -163,19 +243,31 @@ def update_graphs():
                 f"R{reactor.id}: "
                 f"T={latest['temp']}°C "
                 f"OD={latest['od']} "
-                f"pH={latest['ph']} "
-                f"V={latest['volume']} mL"
+                #f"pH={latest['ph']} "
+                #f"V={latest['volume']} mL"
             )
 
 # update tkinter / other gui w every refresh
 def update_gui():
+
     for reactor in reactors:
-        print(
-            f"Reactor {reactor.id}: "
-            f"{reactor.temp:.2f}°C | "
-            f"OD={reactor.od:.3f} | "
-            f"pH={reactor.ph:.2f}"
-        )
+
+        if reactor.last_error:
+            print(
+                f"Reactor {reactor.id}: "
+                f"ERROR = {reactor.last_error} | "
+                f"Errors = {reactor.error_count} | "
+                f"Last valid data = {reactor.last_valid_data_time}"
+            )
+
+        else:
+            print(
+                f"Reactor {reactor.id}: "
+                f"{reactor.temp:.2f}°C | "
+                f"OD={reactor.od:.3f}"
+                #f"pH={reactor.ph:.2f}"
+
+            )
 
 # save data to CSV file
 def save_csv(reactor):
@@ -190,22 +282,22 @@ def save_csv(reactor):
                 "time",
                 "temperature",
                 "OD",
-                "pH",
-                "volume"
+                #"pH",
+                #"volume"
             ])
 
         writer.writerow([
             reactor.time,
             reactor.temp,
             reactor.od,
-            reactor.ph,
-            reactor.volume
+            #reactor.ph,
+            #reactor.volume
         ])
 
 
 if __name__ == "__main__":
 
-    PORTS = ["COM3", "COM4"] # THIS IS FOR 2 ARDUINO NANOS, SOHAM PLS MODIFY THIS TO MORE COM PORTS IF UR TESTING W MORE!!!
+    PORTS = ["COM8", "COM11"] # port numbers for the arduino serial connections
 
     print("Connecting to Arduinos...")
     connect_serial()
@@ -234,11 +326,45 @@ if __name__ == "__main__":
 
                 if ser.in_waiting > 0:
 
-                    line = ser.readline().decode("utf-8").strip()
+                    try:
+                        # Try to read one message
+                        raw_line = ser.readline()
 
-                    print(f"Reactor {i+1}: {line}")
+                        # Decode safely
+                        line = raw_line.decode("utf-8").strip()
 
-                    parse_data(i, line)
+                        print(f"Reactor {i+1}: {line}")
+
+                        # Send the message to the reactor-specific parser
+                        parse_data(i, line)
+
+                    except UnicodeDecodeError:
+                        reactors[i].error_count += 1
+                        reactors[i].last_error = "Invalid UTF-8 data"
+
+                        print(
+                            f"[ERROR] Reactor {i+1}: "
+                            f"Received invalid serial characters"
+                        )
+
+                    except serial.SerialException as e:
+                        reactors[i].connected = False
+                        reactors[i].error_count += 1
+                        reactors[i].last_error = str(e)
+
+                        print(
+                            f"[ERROR] Reactor {i+1}: "
+                            f"Serial connection error: {e}"
+                        )
+
+                    except Exception as e:
+                        reactors[i].error_count += 1
+                        reactors[i].last_error = str(e)
+
+                        print(
+                            f"[ERROR] Reactor {i+1}: "
+                            f"Unexpected serial error: {e}"
+                        )
 
             update_gui() # latest reactor values printed
 
