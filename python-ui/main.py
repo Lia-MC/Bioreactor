@@ -4,6 +4,9 @@ import serial
 from pathlib import Path
 import csv
 import json
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
 
 # constants
 
@@ -23,6 +26,16 @@ BAUDRATE = 115200
 # variables
 connections = []
 reactors = []
+last_commands = {}
+
+# Tkinter variables
+root = None
+reactor_frames = []
+temperature_vars = []
+od_vars = []
+pump_speed_vars = []
+pump_status_vars = []
+connection_vars = []
 
 # bioreactor class
 class Bioreactor:
