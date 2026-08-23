@@ -369,7 +369,60 @@ def stop_pump(reactor_number, pump_name):
             reactor_number,
             output_pump1=0
         )
-        
+
+# pump slider
+def create_pump_control(parent, reactor_number, pump_name):
+
+    frame = ttk.LabelFrame(
+        parent,
+        text=pump_name,
+        padding=10
+    )
+
+    speed_var = tk.IntVar(value=50)
+
+    speed_label = ttk.Label(
+        frame,
+        text="50%"
+    )
+    speed_label.pack()
+
+    def slider_changed(value):
+        value = int(float(value))
+        speed_label.config(text=f"{value}%")
+
+    slider = ttk.Scale(
+        frame,
+        from_=50,
+        to=100,
+        orient="horizontal",
+        command=slider_changed
+    )
+
+    slider.set(50)
+    slider.pack(fill="x", padx=10, pady=5)
+
+    ttk.Button(
+        frame,
+        text="SET SPEED",
+        command=lambda: set_pump_speed(
+            reactor_number,
+            pump_name,
+            slider.get()
+        )
+    ).pack(pady=5)
+
+    ttk.Button(
+        frame,
+        text="STOP",
+        command=lambda: stop_pump(
+            reactor_number,
+            pump_name
+        )
+    ).pack(pady=5)
+
+    return frame
+
 # update tkinter / other gui w every refresh
 def update_gui():
 
