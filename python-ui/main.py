@@ -423,6 +423,61 @@ def create_pump_control(parent, reactor_number, pump_name):
 
     return frame
 
+def set_temperature(reactor_number, temperature):
+
+    try:
+        temperature = float(temperature)
+
+        send_command(
+            reactor_number,
+            temperature=temperature
+        )
+
+    except ValueError:
+        messagebox.showerror(
+            "Invalid Temperature",
+            "Please enter a valid temperature."
+        )
+
+def create_temperature_control(parent, reactor_number):
+
+    frame = ttk.LabelFrame(
+        parent,
+        text="Temperature",
+        padding=10
+    )
+
+    current_label = ttk.Label(
+        frame,
+        text="Current: -- °C"
+    )
+    current_label.pack()
+
+    target_var = tk.StringVar(value="37.0")
+
+    ttk.Label(
+        frame,
+        text="Target temperature:"
+    ).pack(pady=(10, 2))
+
+    entry = ttk.Entry(
+        frame,
+        textvariable=target_var,
+        width=10
+    )
+    entry.pack()
+
+    ttk.Button(
+        frame,
+        text="SET",
+        command=lambda: set_temperature(
+            reactor_number,
+            target_var.get()
+        )
+    ).pack(pady=5)
+
+    return frame, current_label
+
 # update tkinter / other gui w every refresh
 def update_gui():
 
