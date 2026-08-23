@@ -260,6 +260,69 @@ def update_graphs():
                 #f"V={latest['volume']} mL"
             )
 
+# initial od set up 
+# change if necessary based on claire's code?
+def initial_setup():
+    setup_window = tk.Toplevel(root)
+    setup_window.title("Initial Setup")
+    setup_window.geometry("500x350")
+
+    title = ttk.Label(
+        setup_window,
+        text="Initial System Setup",
+        font=("Arial", 16, "bold")
+    )
+    title.pack(pady=15)
+
+    instructions = ttk.Label(
+        setup_window,
+        text=(
+            "This procedure establishes the initial OD reference.\n\n"
+            "1. Ensure the vial holder is completely empty.\n"
+            "2. Collect the blank-system OD.\n"
+            "3. Place the vial containing the blank/no cells.\n"
+            "4. Collect the vial OD.\n\n"
+            "The reference calculation will be handled separately."
+        ),
+        justify="left"
+    )
+    instructions.pack(pady=10)
+
+    blank_od_label = ttk.Label(
+        setup_window,
+        text="Blank-system OD: ---"
+    )
+    blank_od_label.pack(pady=5)
+
+    vial_od_label = ttk.Label(
+        setup_window,
+        text="Blank-vial OD: ---"
+    )
+    vial_od_label.pack(pady=5)
+
+    def collect_blank():
+        # For now, use the current OD reading
+        if reactors:
+            value = reactors[0].od
+            blank_od_label.config(text=f"Blank-system OD: {value:.3f}")
+
+    def collect_vial():
+        if reactors:
+            value = reactors[0].od
+            vial_od_label.config(text=f"Blank-vial OD: {value:.3f}")
+
+    ttk.Button(
+        setup_window,
+        text="Collect Blank-System OD",
+        command=collect_blank
+    ).pack(pady=5)
+
+    ttk.Button(
+        setup_window,
+        text="Collect Blank-Vial OD",
+        command=collect_vial
+    ).pack(pady=5)
+
 # update tkinter / other gui w every refresh
 def update_gui():
 
