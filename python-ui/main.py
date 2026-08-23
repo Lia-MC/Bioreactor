@@ -323,6 +323,53 @@ def initial_setup():
         command=collect_vial
     ).pack(pady=5)
 
+def set_pump_speed(reactor_number, pump_name, speed):
+    speed = int(speed)
+
+    if speed < 50:
+        speed = 50
+
+    if speed > 100:
+        speed = 100
+
+    if pump_name == "Input Pump 1":
+        send_command(
+            reactor_number,
+            input_pump1=speed
+        )
+
+    elif pump_name == "Input Pump 2":
+        send_command(
+            reactor_number,
+            input_pump2=speed
+        )
+
+    elif pump_name == "Output Pump 1":
+        send_command(
+            reactor_number,
+            output_pump1=speed
+        )
+
+def stop_pump(reactor_number, pump_name):
+
+    if pump_name == "Input Pump 1":
+        send_command(
+            reactor_number,
+            input_pump1=0
+        )
+
+    elif pump_name == "Input Pump 2":
+        send_command(
+            reactor_number,
+            input_pump2=0
+        )
+
+    elif pump_name == "Output Pump 1":
+        send_command(
+            reactor_number,
+            output_pump1=0
+        )
+        
 # update tkinter / other gui w every refresh
 def update_gui():
 
