@@ -478,6 +478,23 @@ def create_temperature_control(parent, reactor_number):
 
     return frame, current_label
 
+def create_od_display(parent):
+
+    frame = ttk.LabelFrame(
+        parent,
+        text="Optical Density",
+        padding=10
+    )
+
+    od_label = ttk.Label(
+        frame,
+        text="OD: ---",
+        font=("Arial", 18, "bold")
+    )
+    od_label.pack(pady=10)
+
+    return frame, od_label
+
 # update tkinter / other gui w every refresh
 def update_gui():
 
