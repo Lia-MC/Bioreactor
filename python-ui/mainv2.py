@@ -1,5 +1,241 @@
+# py -m pip install pyserial
+
+# imports
+
+import time
+import serial
+import json
+import threading
 import tkinter as tk
 from tkinter import ttk
+
+# constants
+
+PORTS = [
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "COM10"
+]
+
+BAUDRATE = 115200
+
+connections = []
+reactors = []
+
+# bioreactor class
+
+class Bioreactor:
+
+    def __init__(self, reactor_id):
+
+        self.id = reactor_id
+        self.time = 0
+
+        self.temp = 0
+        self.temp_target = 0
+        self.od = 0
+
+        self.pump_active = False
+        self.pump_speed = 0
+
+        self.fan_pwm = 0
+        self.fan_rpm = 0
+
+        self.history = []
+
+        self.error_count = 0
+        self.last_error = None
+        self.last_valid_data_time = None
+        self.connected = True
+
+        self.targets = {
+            "Temperature": 37.0,
+            "Input Pump 1": 50,
+            "Input Pump 2": 50,
+            "Output Pump 1": 50
+        }
+
+# connecting to COM ports
+
+def connect_serial():
+
+    for i, port in enumerate(PORTS):
+
+        try:
+            ser = serial.Serial(
+                port,
+                BAUDRATE,
+                timeout=1
+            )
+
+            connections.append(ser)
+            reactors.append(Bioreactor(i + 1))
+
+            print(f"Connected to {port}")
+
+        except serial.SerialException:
+
+            print(f"Could not connect to {port}")
+
+# check for messages from Arduino
+
+def serial_thread():
+
+    while True:
+
+        for i, ser in enumerate(connections):
+
+            if ser.in_waiting > 0:
+
+                try:
+
+                    raw_line = ser.readline()
+                    line = raw_line.decode("utf-8").strip()
+
+                    parse_data(i, line)
+
+                except UnicodeDecodeError:
+
+                    reactors[i].error_count += 1
+                    reactors[i].last_error = "Invalid UTF-8 data"
+
+                except serial.SerialException as e:
+
+                    reactors[i].connected = False
+                    reactors[i].error_count += 1
+                    reactors[i].last_error = str(e)
+
+                except Exception as e:
+
+                    reactors[i].error_count += 1
+                    reactors[i].last_error = str(e)
+
+        time.sleep(0.05)
+
+# parse data from Arduino
+
+def parse_data(reactor_number, line):
+
+    if reactor_number < 0 or reactor_number >= len(reactors):
+
+        print(f"Invalid reactor number: {reactor_number}")
+
+        return
+
+    reactor = reactors[reactor_number]
+
+    try:
+
+        if not line:
+            raise ValueError("Empty serial message")
+
+        data = json.loads(line)
+
+        if not isinstance(data, dict):
+            raise ValueError("JSON data is not a dictionary")
+
+        if "Fan PWM" in data:
+            reactor.fan_pwm = data["Fan PWM"]
+
+        if "Fan RPM" in data:
+            reactor.fan_rpm = data["Fan RPM"]
+
+        if "Pump Active" in data:
+            reactor.pump_active = data["Pump Active"]
+
+        if "Pump Speed" in data:
+            reactor.pump_speed = data["Pump Speed"]
+
+        if "Temperature" in data:
+            reactor.temp = float(data["Temperature"])
+
+        if "Temperature Target" in data:
+            reactor.temp_target = float(data["Temperature Target"])
+
+        if "OD" in data:
+            reactor.od = float(data["OD"])
+
+        reactor.time = time.time()
+        reactor.last_valid_data_time = reactor.time
+        reactor.connected = True
+        reactor.last_error = None
+
+        reactor.history.append({
+            "time": reactor.time,
+            "temp": reactor.temp,
+            "od": reactor.od
+        })
+
+    except json.JSONDecodeError:
+
+        reactor.error_count += 1
+        reactor.last_error = "Invalid JSON"
+
+        print(
+            f"[ERROR] Reactor {reactor.id}: "
+            f"Invalid JSON: {line}"
+        )
+
+    except (ValueError, TypeError) as e:
+
+        reactor.error_count += 1
+        reactor.last_error = str(e)
+
+        print(
+            f"[ERROR] Reactor {reactor.id}: "
+            f"Invalid data: {e}"
+        )
+
+# send commands to Arduino
+
+def send_command(
+    reactor_number,
+    temperature=None,
+    input_pump1=None,
+    input_pump2=None,
+    output_pump1=None,
+    stirring_fan=None
+):
+
+    if reactor_number >= len(connections):
+
+        print("Invalid reactor number.")
+
+        return
+
+    command = {}
+
+    if temperature is not None:
+        command["Temperature"] = temperature
+
+    if input_pump1 is not None:
+        command["Input Pump 1"] = input_pump1
+
+    if input_pump2 is not None:
+        command["Input Pump 2"] = input_pump2
+
+    if output_pump1 is not None:
+        command["Output Pump 1"] = output_pump1
+
+    if stirring_fan is not None:
+        command["Stirring Fan"] = stirring_fan
+
+    try:
+
+        msg = json.dumps(command) + "\n"
+
+        connections[reactor_number].write(
+            msg.encode("utf-8")
+        )
+
+    except Exception as e:
+
+        print(f"Failed to send command: {e}")
 
 # create dashboard
 
