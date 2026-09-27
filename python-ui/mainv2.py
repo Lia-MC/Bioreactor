@@ -227,10 +227,12 @@ def parse_data(reactor_number, line):
 
 # setting up for sim
 def setup_simulation():
+
     reactors.clear()
     connections.clear()
 
     for i in range(4):
+
         reactor = Bioreactor(
             reactor_id=i + 1,
             port=f"SIM{i + 1}"
@@ -244,71 +246,64 @@ def setup_simulation():
 
         reactors.append(reactor)
 
+        print(
+            f"Created Reactor {reactor.id} "
+            f"on simulated port {reactor.port}"
+        )
+
     print("Simulation mode enabled")
     print(f"Created {len(reactors)} simulated reactors")
 
+
 def simulation_thread():
-    temperature = 25.0
-    od = 0.12
-    ph = 7.0
 
-    while True:
+    with open("python-ui/simulation.jsonl", "r", encoding="utf-8") as file:
 
-        reactor = reactors[0]
+        for line in file:
 
-        target = reactor.targets["Temperature"]
+            line = line.strip()
 
-        # temperature moves toward target
-        temperature += (target - temperature) * 0.08
+            if not line:
+                continue
 
-        # small sensor noise
-        simulated_temp = temperature + random.uniform(-0.08, 0.08)
+            try:
+                data = json.loads(line)
 
-        # OD slowly increases
-        od += 0.002 + random.uniform(-0.0005, 0.0005)
+                reactor_number = int(data["reactor"]) - 1
+                port = data["port"]
 
-        # pH slowly changes
-        ph += random.uniform(-0.005, 0.005)
+                if reactor_number < 0 or reactor_number >= len(reactors):
+                    print(f"Invalid reactor: {data['reactor']}")
+                    continue
 
-        # keep pH within reasonable range
-        ph = max(5.5, min(8.5, ph))
+                reactor = reactors[reactor_number]
 
-        # simulated pump behaviour
-        pump_active = reactor.pump_active
+                # verify the simulated port
+                if reactor.port != port:
+                    print(
+                        f"Port mismatch: Reactor {reactor_number + 1} "
+                        f"expected {reactor.port}, got {port}"
+                    )
+                    continue
 
-        if pump_active:
-            pump_speed = reactor.pump_speed
-        else:
-            pump_speed = 0
+                # feed the data through the same parser
+                parse_data(
+                    reactor_number,
+                    json.dumps(data)
+                )
 
-        # fan responds to temperature
-        if simulated_temp > target + 0.5:
-            fan_pwm = 70
-        elif simulated_temp > target:
-            fan_pwm = 50
-        else:
-            fan_pwm = 30
+                print(
+                    f"[SIM] Reactor {reactor_number + 1} "
+                    f"({port}) updated"
+                )
 
-        fan_rpm = fan_pwm * 20
+                time.sleep(1)
 
-        data = {
-            "Fan PWM": fan_pwm,
-            "Fan RPM": fan_rpm,
-            "Pump Active": pump_active,
-            "Pump Speed": pump_speed,
-            "Temperature": round(simulated_temp, 2),
-            "Temperature Target": target,
-            "OD": round(od, 3),
-            "pH": round(ph, 2)
-        }
+            except json.JSONDecodeError as e:
+                print(f"Invalid JSONL line: {e}")
 
-        # feed simulated message through the exact same parser used by Arduino
-        parse_data(
-            0,
-            json.dumps(data)
-        )
-
-        time.sleep(1)
+            except KeyError as e:
+                print(f"Missing field in simulation data: {e}")
 
 # send commands to Arduino
 
@@ -2280,6 +2275,11 @@ if __name__ == "__main__":
 
     if SIMULATION_MODE:
         setup_simulation()
+
+        threading.Thread(
+            target=simulation_thread,
+            daemon=True
+        ).start()
     else:
         connect_serial()
 
