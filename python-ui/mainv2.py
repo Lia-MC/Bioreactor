@@ -4,6 +4,7 @@
 
 import time
 from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import serial
 import json
 import threading
@@ -34,9 +35,10 @@ reactors = []
 
 class Bioreactor:
 
-    def __init__(self, reactor_id):
+    def __init__(self, reactor_id, port=None):
 
         self.id = reactor_id
+        self.port = port
         self.time = 0
 
         self.temp = 0
@@ -101,7 +103,7 @@ def connect_serial():
             )
 
             connections.append(ser)
-            reactors.append(Bioreactor(i + 1))
+            reactors.append(Bioreactor(i + 1, port=port))
 
             print(f"Connected to {port}")
 
@@ -282,12 +284,12 @@ def create_dashboard(root):
         pady=20
     )
 
-    dashboard_frame.grid_columnconfigure(0, weight=1)
-    dashboard_frame.grid_columnconfigure(1, weight=1)
-    dashboard_frame.grid_columnconfigure(2, weight=2)
+    # dashboard_frame.grid_columnconfigure(0, weight=1)
+    # dashboard_frame.grid_columnconfigure(1, weight=1)
+    # dashboard_frame.grid_columnconfigure(2, weight=2)
 
-    dashboard_frame.grid_rowconfigure(0, weight=1)
-    dashboard_frame.grid_rowconfigure(1, weight=1)
+    # dashboard_frame.grid_rowconfigure(0, weight=1)
+    # dashboard_frame.grid_rowconfigure(1, weight=1)
 
     colors = {
         "background": "#F4F6F8",
@@ -372,7 +374,7 @@ def create_dashboard(root):
     style.configure(
         "Danger.TButton",
         background=colors["red"],
-        foreground="white",
+        foreground="navy",
         font=("Arial", 10, "bold"),
         padding=8
     )
@@ -386,10 +388,12 @@ def create_dashboard(root):
 
     dashboard_tab = ttk.Frame(notebook, padding=15)
     setup_tab = ttk.Frame(notebook, padding=15)
+    temperature_tab = ttk.Frame(notebook, padding=15)
     spectrophotometer_tab = ttk.Frame(notebook, padding=15)
 
     notebook.add(dashboard_tab, text="Dashboard")
     notebook.add(setup_tab, text="OD Calibration")
+    notebook.add(temperature_tab, text="Temperature Graph")
     notebook.add(spectrophotometer_tab, text="Spectrophotometer")
 
     calibration_steps = {
@@ -472,10 +476,25 @@ def create_dashboard(root):
         style="Title.TLabel"
     ).pack(anchor="w")
 
-    ttk.Label(
-        header_text,
-        style="Subtitle.TLabel"
-    ).pack(anchor="w", pady=(3, 0))
+    # ttk.Label(
+    #     header_text,
+    #     style="Subtitle.TLabel"#,
+    #     # text="Real-time monitoring and control of your bioreactors"
+    # ).pack(anchor="w", pady=(3, 0))
+
+    temperature_button = ttk.Button(
+        header,
+        text="TEMPERATURE GRAPH",
+        style="TButton",
+        command=lambda: notebook.select(temperature_tab)
+    )
+
+    temperature_button.pack(
+        side="right",
+        padx=(5, 10),
+        pady=25
+    )
+
 
     spectro_button = ttk.Button(
         header,
@@ -483,7 +502,12 @@ def create_dashboard(root):
         style="TButton",
         command=lambda: notebook.select(spectrophotometer_tab)
     )
-    spectro_button.pack(side="right", padx=25, pady=25)
+
+    spectro_button.pack(
+        side="right",
+        padx=5,
+        pady=25
+    )
 
     reactor_bar = tk.Frame(
         dashboard_tab,
@@ -525,73 +549,132 @@ def create_dashboard(root):
         dashboard_tab,
         bg=colors["background"]
     )
-    main_cards.pack(fill="x")
-
-    readings_frame = tk.Frame(
-        main_cards,
-        bg=colors["card"],
-        padx=20,
-        pady=15
-    )
-    readings_frame.pack(
-        side="left",
-        fill="both",
-        expand=True,
-        padx=(0, 8)
+    main_cards.pack(
+        fill="x",
+        expand=False,
+        pady=(0, 10)
     )
 
-    ttk.Label(
-        readings_frame,
-        text="LIVE READINGS",
-        style="Header.TLabel"
-    ).pack(anchor="w")
+    # readings_frame = tk.Frame(
+    #     dashboard_tab,
+    #     bg=colors["card"],
+    #     padx=20,
+    #     pady=15
+    # )
+    # readings_frame.pack(
+    #     fill="x",
+    #     pady=(0, 15)
+    # )
 
-    current_temp_label = ttk.Label(
-        readings_frame,
-        text="--.- °C",
-        style="Value.TLabel"
-    )
-    current_temp_label.pack(anchor="w", pady=(15, 0))
+    # ttk.Label(
+    #     readings_frame,
+    #     text="LIVE READINGS",
+    #     style="Header.TLabel"
+    # ).pack(anchor="w")
 
-    ttk.Label(
-        readings_frame,
-        text="Current Temperature",
-        style="Card.TLabel"
-    ).pack(anchor="w")
+    # readings_row = tk.Frame(
+    #     readings_frame,
+    #     bg=colors["card"]
+    # )
+    # readings_row.pack(
+    #     fill="x",
+    #     pady=(10, 0)
+    # )
 
-    current_od_label = ttk.Label(
-        readings_frame,
-        text="--",
-        style="Value.TLabel"
-    )
-    current_od_label.pack(anchor="w", pady=(15, 0))
+    # temperature_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # temperature_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
 
-    ttk.Label(
-        readings_frame,
-        text="Optical Density",
-        style="Card.TLabel"
-    ).pack(anchor="w")
+    # current_temp_label = ttk.Label(
+    #     temperature_reading_frame,
+    #     text="--.- °C",
+    #     style="Value.TLabel"
+    # )
+    # current_temp_label.pack(anchor="w")
 
-    # current pH reading
-    current_ph_label = ttk.Label(
-        readings_frame,
-        text="--.--",
-        style="Value.TLabel"
-    )
-    current_ph_label.pack(anchor="w", pady=(15, 0))
+    # ttk.Label(
+    #     temperature_reading_frame,
+    #     text="Current Temperature",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
 
-    ttk.Label(
-        readings_frame,
-        text="Current pH",
-        style="Card.TLabel"
-    ).pack(anchor="w")
 
-    pump_live_status = ttk.Label(
-        readings_frame,
-        text="Pumps: STOPPED",
-        style="Status.TLabel"
-    )
-    pump_live_status.pack(anchor="w", pady=(15, 0))
+    # od_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # od_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # current_od_label = ttk.Label(
+    #     od_reading_frame,
+    #     text="--",
+    #     style="Value.TLabel"
+    # )
+    # current_od_label.pack(anchor="w")
+
+    # ttk.Label(
+    #     od_reading_frame,
+    #     text="Optical Density",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
+
+
+    # ph_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # ph_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # current_ph_label = ttk.Label(
+    #     ph_reading_frame,
+    #     text="--.--",
+    #     style="Value.TLabel"
+    # )
+    # current_ph_label.pack(anchor="w")
+
+    # ttk.Label(
+    #     ph_reading_frame,
+    #     text="Current pH",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
+
+
+    # pump_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # pump_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # pump_live_status = ttk.Label(
+    #     pump_reading_frame,
+    #     text="Pumps: STOPPED",
+    #     style="Status.TLabel"
+    # )
+    # pump_live_status.pack(anchor="w")
+
+    # ttk.Label(
+    #     pump_reading_frame,
+    #     text="Pump Status",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
 
     controls_frame = tk.Frame(
         main_cards,
@@ -600,10 +683,10 @@ def create_dashboard(root):
         pady=15
     )
     controls_frame.pack(
-        side="right",
-        fill="both",
-        expand=True,
-        padx=(8, 0)
+        fill="x",
+        expand=False,
+        padx=0,
+        pady=0
     )
 
     ttk.Label(
@@ -623,14 +706,298 @@ def create_dashboard(root):
     od_checkbox.pack(anchor="w", pady=(10, 5))
 
     # pH controls
-    ph_frame = tk.Frame(
+    top_controls_frame = tk.Frame(
         controls_frame,
         bg=colors["card"]
     )
 
-    ph_frame.pack(
+    top_controls_frame.pack(
         fill="x",
         pady=(10, 5)
+    )
+
+    # readings_frame = tk.Frame(
+    #     dashboard_tab,
+    #     bg=colors["card"],
+    #     padx=20,
+    #     pady=15
+    # )
+    # readings_frame.pack(
+    #     fill="x",
+    #     pady=(0, 15)
+    # )
+
+    # ttk.Label(
+    #     readings_frame,
+    #     text="LIVE READINGS",
+    #     style="Header.TLabel"
+    # ).pack(anchor="w")
+
+    # readings_row = tk.Frame(
+    #     readings_frame,
+    #     bg=colors["card"]
+    # )
+    # readings_row.pack(
+    #     fill="x"
+    # )
+
+    # temperature_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # temperature_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # current_temp_label = ttk.Label(
+    #     temperature_reading_frame,
+    #     text="--.- °C",
+    #     style="Value.TLabel"
+    # )
+    # current_temp_label.pack(anchor="w")
+
+    # ttk.Label(
+    #     temperature_reading_frame,
+    #     text="Current Temperature",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
+
+
+    # od_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # od_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # current_od_label = ttk.Label(
+    #     od_reading_frame,
+    #     text="--",
+    #     style="Value.TLabel"
+    # )
+    # current_od_label.pack(anchor="w")
+
+    # ttk.Label(
+    #     od_reading_frame,
+    #     text="Optical Density",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
+
+
+    # ph_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # ph_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # current_ph_label = ttk.Label(
+    #     ph_reading_frame,
+    #     text="--.--",
+    #     style="Value.TLabel"
+    # )
+    # current_ph_label.pack(anchor="w")
+
+    # ttk.Label(
+    #     ph_reading_frame,
+    #     text="Current pH",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
+
+
+    # pump_reading_frame = tk.Frame(
+    #     readings_row,
+    #     bg=colors["card"]
+    # )
+    # pump_reading_frame.pack(
+    #     side="left",
+    #     fill="x",
+    #     expand=True
+    # )
+
+    # pump_live_status = ttk.Label(
+    #     pump_reading_frame,
+    #     text="Pumps: STOPPED",
+    #     style="Status.TLabel"
+    # )
+    # pump_live_status.pack(anchor="w")
+
+    # ttk.Label(
+    #     pump_reading_frame,
+    #     text="Pump Status",
+    #     style="Card.TLabel"
+    # ).pack(anchor="w")
+
+    top_controls_frame.grid_columnconfigure(0, weight=1)
+    top_controls_frame.grid_columnconfigure(1, weight=1)
+
+    ph_frame = tk.Frame(
+        top_controls_frame,
+        bg=colors["card"]
+    )
+
+    ph_frame.grid(
+        row=0,
+        column=0,
+        sticky="nsew",
+        padx=(0, 10)
+    )
+
+    # live readings
+    
+    readings_frame = tk.Frame(
+        ph_frame,
+        bg=colors["card"],
+        padx=0,
+        pady=10
+    )
+
+    readings_frame.pack(
+        fill="x",
+        pady=(10, 0)
+    )
+
+    ttk.Label(
+        readings_frame,
+        text="LIVE READINGS",
+        style="Header.TLabel"
+    ).pack(
+        anchor="w",
+        pady=(0, 8)
+    )
+
+    # Temperature
+    temperature_reading_frame = tk.Frame(
+        readings_frame,
+        bg=colors["card"]
+    )
+
+    temperature_reading_frame.pack(
+        fill="x",
+        pady=3
+    )
+
+    current_temp_label = ttk.Label(
+        temperature_reading_frame,
+        text="--.- °C",
+        style="Value.TLabel",
+        font=("Arial", 18, "bold")
+    )
+
+    current_temp_label.pack(
+        side="left"
+    )
+
+    ttk.Label(
+        temperature_reading_frame,
+        text="  Current Temperature",
+        style="Card.TLabel"
+    ).pack(
+        side="left",
+        padx=10
+    )
+
+
+    # OD
+    od_reading_frame = tk.Frame(
+        readings_frame,
+        bg=colors["card"]
+    )
+
+    od_reading_frame.pack(
+        fill="x",
+        pady=3
+    )
+
+    current_od_label = ttk.Label(
+        od_reading_frame,
+        text="--",
+        style="Value.TLabel",
+        font=("Arial", 18, "bold")
+    )
+
+    current_od_label.pack(
+        side="left"
+    )
+
+    ttk.Label(
+        od_reading_frame,
+        text="  Optical Density",
+        style="Card.TLabel"
+    ).pack(
+        side="left",
+        padx=10
+    )
+
+
+    # pH
+    ph_reading_frame = tk.Frame(
+        readings_frame,
+        bg=colors["card"]
+    )
+
+    ph_reading_frame.pack(
+        fill="x",
+        pady=3
+    )
+
+    current_ph_label = ttk.Label(
+        ph_reading_frame,
+        text="--.--",
+        style="Value.TLabel",
+        font=("Arial", 18, "bold")
+    )
+
+    current_ph_label.pack(
+        side="left"
+    )
+
+    ttk.Label(
+        ph_reading_frame,
+        text="  Current pH",
+        style="Card.TLabel"
+    ).pack(
+        side="left",
+        padx=10
+    )
+
+
+    # Pump status
+    pump_reading_frame = tk.Frame(
+        readings_frame,
+        bg=colors["card"]
+    )
+
+    pump_reading_frame.pack(
+        fill="x",
+        pady=3
+    )
+
+    pump_live_status = ttk.Label(
+        pump_reading_frame,
+        text="Pumps: STOPPED",
+        style="Status.TLabel"
+    )
+
+    pump_live_status.pack(
+        side="left"
+    )
+
+    ttk.Label(
+        pump_reading_frame,
+        text="  Pump Status",
+        style="Card.TLabel"
+    ).pack(
+        side="left",
+        padx=10
     )
 
     tk.Label(
@@ -790,6 +1157,38 @@ def create_dashboard(root):
         side="right"
     )
 
+    ttk.Button(
+        ph_frame,
+        text="INITIALIZE pH CONTROL",
+        command=lambda: initialize_ph_control(get_selected_reactor_index())
+    ).pack(
+        fill="x",
+        pady=(8, 5)
+    )
+
+    pump_controls_frame = tk.Frame(
+        top_controls_frame,
+        bg=colors["card"]
+    )
+
+    pump_controls_frame.grid(
+        row=0,
+        column=1,
+        sticky="nsew",
+        padx=(10, 0)
+    )
+
+    tk.Label(
+        pump_controls_frame,
+        text="TEMPERATURE CONTROLS",
+        bg=colors["card"],
+        fg=colors["navy"],
+        font=("Arial", 12, "bold")
+    ).pack(
+        anchor="w",
+        pady=(0, 10)
+    )
+
     target_temperature = tk.DoubleVar(value=37.0)
 
     slider_warning = {"shown": False}
@@ -825,6 +1224,19 @@ def create_dashboard(root):
         volume_l = volume_ml / 1000.0
         hydrogen_concentration = 10 ** (-ph)
         return hydrogen_concentration * volume_l
+
+    def initialize_ph_control(reactor_index):
+        reactor = reactors[reactor_index]
+
+        volume = float(initial_volume_ml.get())
+        ph = float(initial_ph.get())
+
+        reactor.ph_control["initial_volume_ml"] = volume
+        reactor.ph_control["current_volume_ml"] = volume
+        reactor.ph_control["initial_hydrogen_moles"] = calculate_initial_hydrogen_moles(
+            ph,
+            volume
+        )
 
     def calculate_added_particles(volume_ml, concentration, stoichiometry):
         volume_l = volume_ml / 1000.0
@@ -955,44 +1367,33 @@ def create_dashboard(root):
             "temperature": temperature
         })
 
-        update_temperature_graph()
+        # update_temperature_graph()
 
-    pump_power = tk.IntVar(value=50)
+    # temp controls
 
-    pump_power_label = ttk.Label(
-        controls_frame,
-        text="Pump Power: 50%",
-        style="Card.TLabel"
+    temperature_controls_frame = tk.Frame(
+        pump_controls_frame,
+        bg=colors["card"]
     )
-    pump_power_label.pack(anchor="w", pady=(15, 0))
 
-    pump_slider = tk.Scale(
-        controls_frame,
-        from_=50,
-        to=100,
-        orient="horizontal",
-        resolution=1,
-        variable=pump_power,
-        command=pump_power_changed,
-        bg=colors["card"],
-        fg=colors["navy"],
-        highlightthickness=0
-    )
-    pump_slider.pack(
+    temperature_controls_frame.pack(
         fill="x",
-        padx=5,
-        pady=5
+        pady=(5, 10)
     )
 
     temperature_label = ttk.Label(
-        controls_frame,
-        text="Target Temperature",
+        temperature_controls_frame,
+        text="Target Temperature: 37.0 °C",
         style="Card.TLabel"
     )
-    temperature_label.pack(anchor="w", pady=(8, 0))
+
+    temperature_label.pack(
+        anchor="w",
+        pady=(2, 0)
+    )
 
     temperature_slider = tk.Scale(
-        controls_frame,
+        temperature_controls_frame,
         from_=20,
         to=45,
         orient="horizontal",
@@ -1003,6 +1404,7 @@ def create_dashboard(root):
         fg=colors["navy"],
         highlightthickness=0
     )
+
     temperature_slider.pack(
         fill="x",
         padx=5,
@@ -1010,23 +1412,84 @@ def create_dashboard(root):
     )
 
     temperature_button = ttk.Button(
-        controls_frame,
+        temperature_controls_frame,
         text="SET TEMPERATURE",
         style="TButton",
         command=set_temperature
     )
-    temperature_button.pack(fill="x", pady=(5, 8))
 
-    pump_button_frame = ttk.Frame(controls_frame)
-    pump_button_frame.pack(fill="x")
+    temperature_button.pack(
+        fill="x",
+        pady=(5, 5)
+    )
+
+    tk.Label(
+        temperature_controls_frame,
+        text="PUMP CONTROLS",
+        bg=colors["card"],
+        fg=colors["navy"],
+        font=("Arial", 12, "bold")
+    ).pack(
+        anchor="w",
+        pady=(0, 8)
+    )
+
+    pump_power = tk.IntVar(value=50)
+
+    pump_power_label = ttk.Label(
+        pump_controls_frame,
+        text="Pump Power: 50%",
+        style="Card.TLabel"
+    )
+
+    pump_power_label.pack(
+        anchor="w",
+        pady=(5, 0)
+    )
+
+    pump_slider = tk.Scale(
+        pump_controls_frame,
+        from_=50,
+        to=100,
+        orient="horizontal",
+        resolution=1,
+        variable=pump_power,
+        command=pump_power_changed,
+        bg=colors["card"],
+        fg=colors["navy"],
+        highlightthickness=0
+    )
+
+    pump_slider.pack(
+        fill="x",
+        padx=5,
+        pady=5
+    )
+
+
+    # pump control buttons
+    pump_button_frame = ttk.Frame(
+        pump_controls_frame
+    )
+
+    pump_button_frame.pack(
+        fill="x",
+        pady=(15, 5)
+    )
 
     start_button = ttk.Button(
         pump_button_frame,
         text="START PUMPS",
-        command=start_pumps, 
+        command=start_pumps,
         style="TButton"
     )
-    start_button.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+    start_button.pack(
+        side="left",
+        fill="x",
+        expand=True,
+        padx=(0, 5)
+    )
 
     stop_button = ttk.Button(
         pump_button_frame,
@@ -1034,57 +1497,64 @@ def create_dashboard(root):
         style="TButton",
         command=stop_pumps
     )
-    stop_button.pack(side="right", fill="x", expand=True, padx=(5, 0))
 
-    graph_frame = tk.Frame(
-        dashboard_tab,
-        bg=colors["card"],
-        padx=15,
-        pady=10
-    )
-    graph_frame.pack(
-        fill="both",
+    stop_button.pack(
+        side="right",
+        fill="x",
         expand=True,
-        pady=(15, 0)
+        padx=(5, 0)
     )
 
-    ttk.Label(
-        graph_frame,
-        text="TEMPERATURE",
-        style="Header.TLabel"
-    ).pack(anchor="w")
+    # graph_frame = tk.Frame(
+    #     main_cards,
+    #     bg=colors["card"],
+    #     padx=15,
+    #     pady=10
+    # )
+    # graph_frame.pack(
+    #     side="left",
+    #     fill="both",
+    #     expand=True,
+    #     padx=(0, 8)
+    # )
 
-    try:
-        from matplotlib.figure import Figure
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    # ttk.Label(
+    #     graph_frame,
+    #     text="TEMPERATURE",
+    #     style="Header.TLabel"
+    # ).pack(anchor="w")
 
-        temperature_figure = Figure(
-            figsize=(8, 3.2),
-            dpi=100
-        )
-        temperature_axis = temperature_figure.add_subplot(111)
-        temperature_axis.set_xlabel("Time (s)")
-        temperature_axis.set_ylabel("Temperature (°C)")
-        temperature_axis.grid(True, alpha=0.25)
+    # try:
+    #     from matplotlib.figure import Figure
+    #     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-        temperature_canvas = FigureCanvasTkAgg(
-            temperature_figure,
-            master=graph_frame
-        )
-        temperature_canvas.get_tk_widget().pack(
-            fill="both",
-            expand=True
-        )
-    except ImportError:
-        temperature_figure = None
-        temperature_axis = None
-        temperature_canvas = None
+    #     temperature_figure = Figure(
+    #         figsize=(8, 3.2),
+    #         dpi=100
+    #     )
+    #     temperature_axis = temperature_figure.add_subplot(111)
+    #     temperature_axis.set_xlabel("Time (s)")
+    #     temperature_axis.set_ylabel("Temperature (°C)")
+    #     temperature_axis.grid(True, alpha=0.25)
 
-        ttk.Label(
-            graph_frame,
-            text="Install matplotlib with: py -m pip install matplotlib",
-            style="Card.TLabel"
-        ).pack(expand=True)
+    #     temperature_canvas = FigureCanvasTkAgg(
+    #         temperature_figure,
+    #         master=graph_frame
+    #     )
+    #     temperature_canvas.get_tk_widget().pack(
+    #         fill="both",
+    #         expand=True
+    #     )
+    # except ImportError:
+    #     temperature_figure = None
+    #     temperature_axis = None
+    #     temperature_canvas = None
+
+    #     ttk.Label(
+    #         graph_frame,
+    #         text="Install matplotlib with: py -m pip install matplotlib",
+    #         style="Card.TLabel"
+    #     ).pack(expand=True)
 
     def get_selected_reactor_index():
         value = reactor_choice.get().split()[-1]
@@ -1098,23 +1568,63 @@ def create_dashboard(root):
         return None
 
     def update_temperature_graph():
+
         if temperature_axis is None:
             return
-
-        temperature_axis.clear()
-        temperature_axis.set_xlabel("Time (s)")
-        temperature_axis.set_ylabel("Temperature (°C)")
-        temperature_axis.grid(True, alpha=0.25)
 
         reactor_index = get_selected_reactor_index()
 
         if reactor_index is None:
+            temperature_axis.clear()
+
+            temperature_axis.set_xlabel("Time (s)")
+            temperature_axis.set_ylabel("Temperature (°C)")
+            temperature_axis.set_title("Temperature Over Time")
+            temperature_axis.grid(True, alpha=0.25)
+
             temperature_canvas.draw_idle()
+
             return
 
         reactor = reactors[reactor_index]
 
+        # update current temperature display
+
+        temperature_current_label.config(
+            text=f"{reactor.temp:.1f} °C"
+        )
+
+        temperature_target_display.config(
+            text=f"Target: {reactor.targets['Temperature']:.1f} °C"
+        )
+
+
+        # clear graph
+
+        temperature_axis.clear()
+
+        temperature_axis.set_xlabel(
+            "Time (s)"
+        )
+
+        temperature_axis.set_ylabel(
+            "Temperature (°C)"
+        )
+
+        temperature_axis.set_title(
+            f"Reactor {reactor_index + 1} Temperature"
+        )
+
+        temperature_axis.grid(
+            True,
+            alpha=0.25
+        )
+
+
+        # plot measured temperature
+
         if reactor.history:
+
             start_time = reactor.history[0]["time"]
 
             x_values = [
@@ -1131,19 +1641,40 @@ def create_dashboard(root):
                 x_values,
                 y_values,
                 linewidth=2,
-                label=f"Reactor {reactor_index + 1}"
+                label="Measured Temperature"
             )
 
-            temperature_axis.legend(loc="upper left")
 
-            for command in temperature_commands.get(reactor_index, []):
-                command_x = command["time"] - start_time
+            # plot target temperature
+
+            target = reactor.targets["Temperature"]
+
+            temperature_axis.axhline(
+                target,
+                linestyle="--",
+                linewidth=1.5,
+                alpha=0.8,
+                label=f"Target {target:.1f} °C"
+            )
+
+
+            # plot temperature command events
+
+            for command in temperature_commands.get(
+                reactor_index,
+                []
+            ):
+
+                command_x = (
+                    command["time"] - start_time
+                )
 
                 if x_values and command_x >= x_values[0]:
+
                     temperature_axis.axvline(
                         command_x,
-                        linestyle="--",
-                        alpha=0.7
+                        linestyle=":",
+                        alpha=0.6
                     )
 
                     temperature_axis.text(
@@ -1154,7 +1685,14 @@ def create_dashboard(root):
                         verticalalignment="top"
                     )
 
+
+            temperature_axis.legend(
+                loc="upper left"
+            )
+
+
         temperature_figure.tight_layout()
+
         temperature_canvas.draw_idle()
 
     def update_dashboard():
@@ -1304,6 +1842,157 @@ def create_dashboard(root):
         text="BACK TO DASHBOARD",
         command=lambda: notebook.select(dashboard_tab)
     ).pack(pady=10)
+
+    # temperature tab
+
+    temperature_header = tk.Frame(
+        temperature_tab,
+        bg=colors["navy"],
+        padx=20,
+        pady=20
+    )
+
+    temperature_header.pack(
+        fill="x",
+        pady=(0, 15)
+    )
+
+    tk.Label(
+        temperature_header,
+        text="TEMPERATURE",
+        bg=colors["navy"],
+        fg="white",
+        font=("Arial", 20, "bold")
+    ).pack(anchor="w")
+
+    tk.Label(
+        temperature_header,
+        text="Real-time temperature monitoring",
+        bg=colors["navy"],
+        fg="#DCE6F0",
+        font=("Arial", 10)
+    ).pack(anchor="w", pady=(3, 0))
+
+
+    # temperature content card
+
+    temperature_content = tk.Frame(
+        temperature_tab,
+        bg=colors["card"],
+        padx=20,
+        pady=20
+    )
+
+    temperature_content.pack(
+        fill="both",
+        expand=True
+    )
+
+
+    # current temperature display
+
+    temperature_current_label = tk.Label(
+        temperature_content,
+        text="--.- °C",
+        bg=colors["card"],
+        fg=colors["navy"],
+        font=("Arial", 32, "bold")
+    )
+
+    temperature_current_label.pack(
+        pady=(5, 0)
+    )
+
+
+    tk.Label(
+        temperature_content,
+        text="Current Temperature",
+        bg=colors["card"],
+        fg=colors["dark_grey"],
+        font=("Arial", 11)
+    ).pack(
+        pady=(0, 15)
+    )
+
+
+    # target temperature display
+
+    temperature_target_display = tk.Label(
+        temperature_content,
+        text="Target: --.- °C",
+        bg=colors["card"],
+        fg=colors["blue"],
+        font=("Arial", 12, "bold")
+    )
+
+    temperature_target_display.pack(
+        pady=(0, 10)
+    )
+
+
+    # matplotlib temperature graph
+
+    try:
+
+        temperature_figure = Figure(
+            figsize=(8, 4.5),
+            dpi=100
+        )
+
+        temperature_axis = temperature_figure.add_subplot(111)
+
+        temperature_axis.set_xlabel(
+            "Time (s)"
+        )
+
+        temperature_axis.set_ylabel(
+            "Temperature (°C)"
+        )
+
+        temperature_axis.set_title(
+            "Temperature Over Time"
+        )
+
+        temperature_axis.grid(
+            True,
+            alpha=0.25
+        )
+
+        temperature_canvas = FigureCanvasTkAgg(
+            temperature_figure,
+            master=temperature_content
+        )
+
+        temperature_canvas.get_tk_widget().pack(
+            fill="both",
+            expand=True,
+            pady=10
+        )
+
+    except ImportError:
+
+        temperature_figure = None
+        temperature_axis = None
+        temperature_canvas = None
+
+        tk.Label(
+            temperature_content,
+            text="Install matplotlib with: py -m pip install matplotlib",
+            bg=colors["card"],
+            fg=colors["dark_grey"]
+        ).pack(expand=True)
+
+
+    # back button
+
+    ttk.Button(
+        temperature_content,
+        text="BACK TO DASHBOARD",
+        command=lambda: notebook.select(dashboard_tab)
+    ).pack(
+        pady=(10, 0)
+    )
+
 
     spectro_history = []
 
@@ -1478,13 +2167,26 @@ if __name__ == "__main__":
     root.geometry("1100x800")
     root.minsize(900, 700)
 
+    SIMULATION_MODE = True
+
     connect_serial()
 
     if connections:
         threading.Thread(
             target=serial_thread,
             daemon=True
-        ).start()
+        ).start()    
+
+    # if SIMULATION_MODE:
+    #     setup_simulation()
+    # else:
+    #     connect_serial()
+
+    #     if connections:
+    #         threading.Thread(
+    #             target=serial_thread,
+    #             daemon=True
+    #         ).start()
 
     create_dashboard(root)
 
