@@ -12,9 +12,11 @@ import tkinter as tk
 from tkinter import ttk, simpledialog
 import tkinter.messagebox
 import math
+import random
 
 # constants
 
+SIMULATION_MODE = True # change this to False if you don't want to simulate 
 PORTS = [
     "COM3",
     "COM4",
@@ -223,6 +225,91 @@ def parse_data(reactor_number, line):
             f"Invalid data: {e}"
         )
 
+# setting up for sim
+def setup_simulation():
+    reactors.clear()
+    connections.clear()
+
+    for i in range(4):
+        reactor = Bioreactor(
+            reactor_id=i + 1,
+            port=f"SIM{i + 1}"
+        )
+
+        reactor.connected = True
+        reactor.temp = 25.0
+        reactor.temp_target = 37.0
+        reactor.od = 0.12
+        reactor.ph = 7.0
+
+        reactors.append(reactor)
+
+    print("Simulation mode enabled")
+    print(f"Created {len(reactors)} simulated reactors")
+
+def simulation_thread():
+    temperature = 25.0
+    od = 0.12
+    ph = 7.0
+
+    while True:
+
+        reactor = reactors[0]
+
+        target = reactor.targets["Temperature"]
+
+        # temperature moves toward target
+        temperature += (target - temperature) * 0.08
+
+        # small sensor noise
+        simulated_temp = temperature + random.uniform(-0.08, 0.08)
+
+        # OD slowly increases
+        od += 0.002 + random.uniform(-0.0005, 0.0005)
+
+        # pH slowly changes
+        ph += random.uniform(-0.005, 0.005)
+
+        # keep pH within reasonable range
+        ph = max(5.5, min(8.5, ph))
+
+        # simulated pump behaviour
+        pump_active = reactor.pump_active
+
+        if pump_active:
+            pump_speed = reactor.pump_speed
+        else:
+            pump_speed = 0
+
+        # fan responds to temperature
+        if simulated_temp > target + 0.5:
+            fan_pwm = 70
+        elif simulated_temp > target:
+            fan_pwm = 50
+        else:
+            fan_pwm = 30
+
+        fan_rpm = fan_pwm * 20
+
+        data = {
+            "Fan PWM": fan_pwm,
+            "Fan RPM": fan_rpm,
+            "Pump Active": pump_active,
+            "Pump Speed": pump_speed,
+            "Temperature": round(simulated_temp, 2),
+            "Temperature Target": target,
+            "OD": round(od, 3),
+            "pH": round(ph, 2)
+        }
+
+        # feed simulated message through the exact same parser used by Arduino
+        parse_data(
+            0,
+            json.dumps(data)
+        )
+
+        time.sleep(1)
+
 # send commands to Arduino
 
 def send_command(
@@ -234,10 +321,36 @@ def send_command(
     stirring_fan=None
 ):
 
+    if SIMULATION_MODE:
+
+        if reactor_number < 0 or reactor_number >= len(reactors):
+            print("Invalid simulated reactor.")
+            return
+
+        reactor = reactors[reactor_number]
+
+        if temperature is not None:
+            reactor.targets["Temperature"] = temperature
+            reactor.temp_target = temperature
+
+        if input_pump1 is not None:
+            reactor.pump_speed = input_pump1
+
+        if input_pump1 is not None:
+            reactor.pump_active = input_pump1 > 0
+
+        print(
+            f"[SIM] Reactor {reactor_number + 1}: "
+            f"temperature={temperature}, "
+            f"pump={reactor.pump_active}, "
+            f"speed={reactor.pump_speed}"
+        )
+
+        return
+
+    # real Arduino mode
     if reactor_number >= len(connections):
-
         print("Invalid reactor number.")
-
         return
 
     command = {}
@@ -258,7 +371,6 @@ def send_command(
         command["Stirring Fan"] = stirring_fan
 
     try:
-
         msg = json.dumps(command) + "\n"
 
         connections[reactor_number].write(
@@ -266,7 +378,6 @@ def send_command(
         )
 
     except Exception as e:
-
         print(f"Failed to send command: {e}")
 
 # create dashboard
@@ -2167,26 +2278,16 @@ if __name__ == "__main__":
     root.geometry("1100x800")
     root.minsize(900, 700)
 
-    SIMULATION_MODE = True
+    if SIMULATION_MODE:
+        setup_simulation()
+    else:
+        connect_serial()
 
-    connect_serial()
-
-    if connections:
-        threading.Thread(
-            target=serial_thread,
-            daemon=True
-        ).start()
-
-    # if SIMULATION_MODE:
-    #     setup_simulation()
-    # else:
-    #     connect_serial()
-
-    #     if connections:
-    #         threading.Thread(
-    #             target=serial_thread,
-    #             daemon=True
-    #         ).start()
+        if connections:
+            threading.Thread(
+                target=serial_thread,
+                daemon=True
+            ).start()
 
     create_dashboard(root)
 
