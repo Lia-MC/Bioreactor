@@ -2175,7 +2175,7 @@ if __name__ == "__main__":
         threading.Thread(
             target=serial_thread,
             daemon=True
-        ).start()    
+        ).start()
 
     # if SIMULATION_MODE:
     #     setup_simulation()
