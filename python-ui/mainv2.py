@@ -3,11 +3,14 @@
 # imports
 
 import time
+from matplotlib.figure import Figure
 import serial
 import json
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, simpledialog
+import tkinter.messagebox
+import math
 
 # constants
 
@@ -39,6 +42,30 @@ class Bioreactor:
         self.temp = 0
         self.temp_target = 0
         self.od = 0
+        self.ph = 0
+        # self.ph_control = {
+        #     "initial_volume_ml": 0.0,
+        #     "current_volume_ml": 0.0,
+        #     "acid_moles": 0.0,
+        #     "base_moles": 0.0,
+        #     "acid_additions_ml": 0.0,
+        #     "base_additions_ml": 0.0,
+        #     "target_ph": 7.0,
+        #     "acid_type": None,
+        #     "base_type": None
+        # }    
+        self.ph_control = {
+            "initial_volume_ml": 0.0,
+            "current_volume_ml": 0.0,
+            "initial_hydrogen_moles": 0.0,
+            "acid_moles": 0.0,
+            "base_moles": 0.0,
+            "acid_additions_ml": 0.0,
+            "base_additions_ml": 0.0,
+            "target_ph": 7.0,
+            "acid_type": None,
+            "base_type": None
+        }
 
         self.pump_active = False
         self.pump_speed = 0
@@ -160,6 +187,9 @@ def parse_data(reactor_number, line):
         if "OD" in data:
             reactor.od = float(data["OD"])
 
+        if "pH" in data:
+            reactor.ph = float(data["pH"])
+
         reactor.time = time.time()
         reactor.last_valid_data_time = reactor.time
         reactor.connected = True
@@ -241,215 +271,1201 @@ def send_command(
 
 def create_dashboard(root):
 
-    # initial od setup
-
-    initial_setup_frame = ttk.LabelFrame(
-        root,
-        text="Initial Setup",
-        padding=15
+    dashboard_frame = tk.Frame(
+        root
     )
 
-    initial_setup_frame.pack(
-        fill="x",
-        padx=30,
-        pady=(25, 10)
+    dashboard_frame.pack(
+        fill="both",
+        expand=True,
+        padx=20,
+        pady=20
     )
 
-    # collect blank OD
+    dashboard_frame.grid_columnconfigure(0, weight=1)
+    dashboard_frame.grid_columnconfigure(1, weight=1)
+    dashboard_frame.grid_columnconfigure(2, weight=2)
+
+    dashboard_frame.grid_rowconfigure(0, weight=1)
+    dashboard_frame.grid_rowconfigure(1, weight=1)
+
+    colors = {
+        "background": "#F4F6F8",
+        "card": "#FFFFFF",
+        "navy": "#17324D",
+        "blue": "#2F80ED",
+        "green": "#27AE60",
+        "orange": "#F2994A",
+        "red": "#EB5757",
+        "grey": "#D9DEE5",
+        "dark_grey": "#5B6573"
+    }
+
+    root.configure(bg=colors["background"])
+
+    style = ttk.Style()
+    style.configure("TFrame", background=colors["background"])
+    style.configure("Card.TFrame", background=colors["card"])
+    style.configure(
+        "TLabel",
+        background=colors["background"],
+        foreground=colors["navy"],
+        font=("Arial", 10)
+    )
+    style.configure(
+        "Card.TLabel",
+        background=colors["card"],
+        foreground=colors["navy"],
+        font=("Arial", 10)
+    )
+    style.configure(
+        "Title.TLabel",
+        background=colors["navy"],
+        foreground="white",
+        font=("Arial", 22, "bold")
+    )
+    style.configure(
+        "Subtitle.TLabel",
+        background=colors["navy"],
+        foreground="#DCE6F0",
+        font=("Arial", 10)
+    )
+    style.configure(
+        "Header.TLabel",
+        background=colors["card"],
+        foreground=colors["navy"],
+        font=("Arial", 14, "bold")
+    )
+    style.configure(
+        "Value.TLabel",
+        background=colors["card"],
+        foreground=colors["navy"],
+        font=("Arial", 24, "bold")
+    )
+    style.configure(
+        "Status.TLabel",
+        background=colors["card"],
+        foreground=colors["green"],
+        font=("Arial", 10, "bold")
+    )
+    style.configure(
+        "TNotebook",
+        background=colors["background"],
+        borderwidth=0
+    )
+    style.configure(
+        "TNotebook.Tab",
+        padding=(20, 10),
+        font=("Arial", 10, "bold")
+    )
+    style.configure(
+        "Accent.TButton",
+        background=colors["blue"],
+        foreground="white",
+        font=("Arial", 10, "bold"),
+        padding=8
+    )
+    style.map(
+        "Accent.TButton",
+        background=[("active", "#2469BE")]
+    )
+    style.configure(
+        "Danger.TButton",
+        background=colors["red"],
+        foreground="white",
+        font=("Arial", 10, "bold"),
+        padding=8
+    )
+    style.configure(
+        "TButton",
+        padding=7
+    )
+
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True, padx=15, pady=15)
+
+    dashboard_tab = ttk.Frame(notebook, padding=15)
+    setup_tab = ttk.Frame(notebook, padding=15)
+    spectrophotometer_tab = ttk.Frame(notebook, padding=15)
+
+    notebook.add(dashboard_tab, text="Dashboard")
+    notebook.add(setup_tab, text="OD Calibration")
+    notebook.add(spectrophotometer_tab, text="Spectrophotometer")
+
+    calibration_steps = {
+        "blank": False,
+        "vial": False,
+        "reference": False
+    }
+
+    temperature_commands = {}
+
+    def calibration_complete():
+        return all(calibration_steps.values())
+
+    def update_calibration_status():
+        completed = sum(calibration_steps.values())
+
+        if completed == 3:
+            calibration_status.config(
+                text="✓ OD CALIBRATION COMPLETE",
+                foreground=colors["green"]
+            )
+        else:
+            calibration_status.config(
+                text=f"OD Calibration: {completed}/3 complete",
+                foreground=colors["orange"]
+            )
+
+    def require_calibration():
+        if calibration_complete():
+            return True
+
+        result = calibration_warning(root)
+
+        if result == "calibrate":
+            notebook.select(setup_tab)
+
+        return False
 
     def collect_blank_od():
         print("Collecting OD of blank vial holder")
-        # more code goes here
-
-
-    blank_od_button = ttk.Button(
-        initial_setup_frame,
-        text="Collect OD of blank vial with no vial (nothing in the vial holder)",
-        command=collect_blank_od
-    )
-
-    blank_od_button.pack(
-        fill="x",
-        pady=5
-    )
-
-    # collect OD with vial
+        calibration_steps["blank"] = True
+        blank_od_button.config(
+            state="disabled",
+            text="✓ Blank OD collected"
+        )
+        update_calibration_status()
 
     def collect_vial_od():
         print("Collecting OD with empty vial")
-        # more code goes here
-
-
-    vial_od_button = ttk.Button(
-        initial_setup_frame,
-        text="Collect OD with vial inside bioreactor with nothing in the vial",
-        command=collect_vial_od
-    )
-
-    vial_od_button.pack(
-        fill="x",
-        pady=5
-    )
-
-
-    # reference collection
+        calibration_steps["vial"] = True
+        vial_od_button.config(
+            state="disabled",
+            text="✓ Vial OD collected"
+        )
+        update_calibration_status()
 
     def reference_collection():
         print("Starting reference collection")
-        # more code goes here
+        calibration_steps["reference"] = True
+        reference_button.config(
+            state="disabled",
+            text="✓ Reference collected"
+        )
+        update_calibration_status()
 
+    header = tk.Frame(
+        dashboard_tab,
+        bg=colors["navy"],
+        height=95
+    )
+    header.pack(fill="x", pady=(0, 15))
+    header.pack_propagate(False)
 
-    reference_button = ttk.Button(
-        initial_setup_frame,
-        text="Reference Collection",
-        command=reference_collection
+    header_text = tk.Frame(header, bg=colors["navy"])
+    header_text.pack(side="left", padx=25, pady=15)
+
+    ttk.Label(
+        header_text,
+        text="BIOREACTOR DASHBOARD",
+        style="Title.TLabel"
+    ).pack(anchor="w")
+
+    ttk.Label(
+        header_text,
+        style="Subtitle.TLabel"
+    ).pack(anchor="w", pady=(3, 0))
+
+    spectro_button = ttk.Button(
+        header,
+        text="SPECTROPHOTOMETER",
+        style="TButton",
+        command=lambda: notebook.select(spectrophotometer_tab)
+    )
+    spectro_button.pack(side="right", padx=25, pady=25)
+
+    reactor_bar = tk.Frame(
+        dashboard_tab,
+        bg=colors["card"],
+        padx=15,
+        pady=10
+    )
+    reactor_bar.pack(fill="x", pady=(0, 15))
+
+    tk.Label(
+        reactor_bar,
+        text="Current Reactor",
+        bg=colors["card"],
+        fg=colors["navy"],
+        font=("Arial", 10, "bold")
+    ).pack(side="left")
+
+    reactor_choice = tk.StringVar(value="Reactor 1")
+
+    reactor_menu = ttk.Combobox(
+        reactor_bar,
+        textvariable=reactor_choice,
+        values=[f"Reactor {i + 1}" for i in range(len(PORTS))],
+        state="readonly",
+        width=15
+    )
+    reactor_menu.pack(side="left", padx=10)
+
+    connection_status = tk.Label(
+        reactor_bar,
+        text="● NOT CONNECTED",
+        bg=colors["card"],
+        fg=colors["orange"],
+        font=("Arial", 10, "bold")
+    )
+    connection_status.pack(side="left", padx=10)
+
+    main_cards = tk.Frame(
+        dashboard_tab,
+        bg=colors["background"]
+    )
+    main_cards.pack(fill="x")
+
+    readings_frame = tk.Frame(
+        main_cards,
+        bg=colors["card"],
+        padx=20,
+        pady=15
+    )
+    readings_frame.pack(
+        side="left",
+        fill="both",
+        expand=True,
+        padx=(0, 8)
     )
 
-    reference_button.pack(
+    ttk.Label(
+        readings_frame,
+        text="LIVE READINGS",
+        style="Header.TLabel"
+    ).pack(anchor="w")
+
+    current_temp_label = ttk.Label(
+        readings_frame,
+        text="--.- °C",
+        style="Value.TLabel"
+    )
+    current_temp_label.pack(anchor="w", pady=(15, 0))
+
+    ttk.Label(
+        readings_frame,
+        text="Current Temperature",
+        style="Card.TLabel"
+    ).pack(anchor="w")
+
+    current_od_label = ttk.Label(
+        readings_frame,
+        text="--",
+        style="Value.TLabel"
+    )
+    current_od_label.pack(anchor="w", pady=(15, 0))
+
+    ttk.Label(
+        readings_frame,
+        text="Optical Density",
+        style="Card.TLabel"
+    ).pack(anchor="w")
+
+    # current pH reading
+    current_ph_label = ttk.Label(
+        readings_frame,
+        text="--.--",
+        style="Value.TLabel"
+    )
+    current_ph_label.pack(anchor="w", pady=(15, 0))
+
+    ttk.Label(
+        readings_frame,
+        text="Current pH",
+        style="Card.TLabel"
+    ).pack(anchor="w")
+
+    pump_live_status = ttk.Label(
+        readings_frame,
+        text="Pumps: STOPPED",
+        style="Status.TLabel"
+    )
+    pump_live_status.pack(anchor="w", pady=(15, 0))
+
+    controls_frame = tk.Frame(
+        main_cards,
+        bg=colors["card"],
+        padx=20,
+        pady=15
+    )
+    controls_frame.pack(
+        side="right",
+        fill="both",
+        expand=True,
+        padx=(8, 0)
+    )
+
+    ttk.Label(
+        controls_frame,
+        text="CONTROLS",
+        style="Header.TLabel"
+    ).pack(anchor="w")
+
+    # od normalization setting
+    od_normalized = tk.BooleanVar(value=False)
+
+    od_checkbox = ttk.Checkbutton(
+        controls_frame,
+        text="OD is normalized",
+        variable=od_normalized
+    )
+    od_checkbox.pack(anchor="w", pady=(10, 5))
+
+    # pH controls
+    ph_frame = tk.Frame(
+        controls_frame,
+        bg=colors["card"]
+    )
+
+    ph_frame.pack(
         fill="x",
-        pady=5
+        pady=(10, 5)
+    )
+
+    tk.Label(
+        ph_frame,
+        text="pH CONTROLS",
+        bg=colors["card"],
+        fg=colors["navy"],
+        font=("Arial", 12, "bold")
+    ).pack(
+        anchor="w",
+        pady=(0, 5)
+    )
+
+    # create pH input variables
+    inlet_pump1_ph = tk.StringVar(value="7.0")
+    inlet_pump2_ph = tk.StringVar(value="7.0")
+    initial_ph = tk.StringVar(value="7.0")
+    initial_volume_ml = tk.StringVar(value="1000")
+
+    acid_types = {
+        "HCl": {
+            "type": "strong_acid",
+            "stoichiometry": 1,
+            "concentration": 1.0
+        },
+        "H2SO4": {
+            "type": "strong_acid",
+            "stoichiometry": 2,
+            "concentration": 1.0
+        }
+    }
+
+    base_types = {
+        "NaOH": {
+            "type": "strong_base",
+            "stoichiometry": 1,
+            "concentration": 1.0
+        }
+    }
+
+
+    # inlet pump 1 known pH
+    pump1_ph_row = tk.Frame(
+        ph_frame,
+        bg=colors["card"]
+    )
+
+    pump1_ph_row.pack(
+        fill="x",
+        pady=2
+    )
+
+    tk.Label(
+        pump1_ph_row,
+        text="Known pH - Inlet Pump 1",
+        bg=colors["card"],
+        fg=colors["dark_grey"],
+        font=("Arial", 10)
+    ).pack(
+        side="left"
+    )
+
+    ttk.Entry(
+        pump1_ph_row,
+        textvariable=inlet_pump1_ph,
+        width=10
+    ).pack(
+        side="right"
     )
 
 
+    # inlet pump 2 known pH
+    pump2_ph_row = tk.Frame(
+        ph_frame,
+        bg=colors["card"]
+    )
 
-    # pump control
+    pump2_ph_row.pack(
+        fill="x",
+        pady=2
+    )
 
-    pump_power = tk.IntVar(value=50)
+    tk.Label(
+        pump2_ph_row,
+        text="Known pH - Inlet Pump 2",
+        bg=colors["card"],
+        fg=colors["dark_grey"],
+        font=("Arial", 10)
+    ).pack(
+        side="left"
+    )
 
+    ttk.Entry(
+        pump2_ph_row,
+        textvariable=inlet_pump2_ph,
+        width=10
+    ).pack(
+        side="right"
+    )
+
+    # initial volume 
+    initial_volume_row = tk.Frame(
+        ph_frame,
+        bg=colors["card"]
+    )
+
+    initial_volume_row.pack(
+        fill="x",
+        pady=2
+    )
+
+    tk.Label(
+        initial_volume_row,
+        text="Initial Reactor Volume (mL)",
+        bg=colors["card"],
+        fg=colors["dark_grey"],
+        font=("Arial", 10)
+    ).pack(
+        side="left"
+    )
+
+    ttk.Entry(
+        initial_volume_row,
+        textvariable=initial_volume_ml,
+        width=10
+    ).pack(
+        side="right"
+    )
+
+
+    # approximate initial pH
+    initial_ph_row = tk.Frame(
+        ph_frame,
+        bg=colors["card"]
+    )
+
+    initial_ph_row.pack(
+        fill="x",
+        pady=2
+    )
+
+    tk.Label(
+        initial_ph_row,
+        text="Approximate Initial pH",
+        bg=colors["card"],
+        fg=colors["dark_grey"],
+        font=("Arial", 10)
+    ).pack(
+        side="left"
+    )
+
+    ttk.Entry(
+        initial_ph_row,
+        textvariable=initial_ph,
+        width=10
+    ).pack(
+        side="right"
+    )
+
+    target_temperature = tk.DoubleVar(value=37.0)
+
+    slider_warning = {"shown": False}
+
+    def show_slider_warning():
+        if slider_warning["shown"]:
+            return False
+
+        slider_warning["shown"] = True
+        result = calibration_warning(root)
+
+        if result == "calibrate":
+            notebook.select(setup_tab)
+
+        root.after(300, lambda: slider_warning.update({"shown": False}))
+        return True
 
     def pump_power_changed(value):
-
         power = int(float(value))
 
         pump_power_label.config(
             text=f"Pump Power: {power}%"
         )
 
+    def temperature_changed(value):
+        temperature = float(value)
 
-    def stop_pumps():
-
-        print("STOP PUMPS")
-
-        pump_status.config(
-            text="Pumps: STOPPED"
+        temperature_label.config(
+            text=f"Target Temperature: {temperature:.1f} °C"
         )
 
-    # pump controls
+    def calculate_initial_hydrogen_moles(ph, volume_ml):
+        volume_l = volume_ml / 1000.0
+        hydrogen_concentration = 10 ** (-ph)
+        return hydrogen_concentration * volume_l
 
-    pump_frame = ttk.LabelFrame(
-        root,
-        text="Pump Controls",
-        padding=15
-    )
+    def calculate_added_particles(volume_ml, concentration, stoichiometry):
+        volume_l = volume_ml / 1000.0
+        return volume_l * concentration * stoichiometry
 
-    pump_frame.pack(
-        fill="x",
-        padx=30,
-        pady=10
-    )
+    def update_reactor_volume(reactor_index, added_volume_ml):
+        reactor = reactors[reactor_index]
+        reactor.ph_control["current_volume_ml"] += added_volume_ml
 
+    def get_net_hydrogen_moles(reactor_index):
+        reactor = reactors[reactor_index]
+        return (reactor.ph_control["initial_hydrogen_moles"] + reactor.ph_control["acid_moles"] - reactor.ph_control["base_moles"])
 
-    # stop button
+    def calculate_current_ph(reactor_index):
+        reactor = reactors[reactor_index]
+        volume_l = reactor.ph_control["current_volume_ml"] / 1000.0
+        if volume_l <= 0:
+            return None
+        net_hydrogen_moles = get_net_hydrogen_moles(reactor_index)
+        hydrogen_concentration = net_hydrogen_moles / volume_l
+        if hydrogen_concentration <= 0:
+            return 14.0
+        return -math.log10(hydrogen_concentration)
 
-    stop_button = ttk.Button(
-        pump_frame,
-        text="STOP PUMPS",
-        command=stop_pumps
-    )
+    def calculate_ph_adjustment(reactor_index):
+        reactor = reactors[reactor_index]
+        volume_l = (
+            reactor.ph_control["current_volume_ml"] / 1000.0
+        )
+        current_h_moles = get_net_hydrogen_moles(reactor_index)
+        target_ph = reactor.ph_control["target_ph"]
+        target_h_concentration = 10 ** (-target_ph)
+        target_h_moles = target_h_concentration * volume_l
+        difference = target_h_moles - current_h_moles
+        return difference
 
-    stop_button.pack(
-        pady=(0, 15)
-    )
+    def calculate_acid_volume(required_h_moles, concentration, stoichiometry):
+        if required_h_moles <= 0:
+            return 0
+        moles_of_acid = required_h_moles / stoichiometry
+        volume_l = moles_of_acid / concentration
+        return volume_l * 1000
 
+    def calculate_base_volume(required_oh_moles, concentration, stoichiometry):
+        if required_oh_moles <= 0:
+            return 0
+        moles_of_base = required_oh_moles / stoichiometry
+        volume_l = moles_of_base / concentration
+        return volume_l * 1000
 
-    # pump power label
+    def stop_pumps():
+        print("STOP PUMPS")
+
+        for reactor_index in range(len(connections)):
+            send_command(
+                reactor_index,
+                input_pump1=0,
+                input_pump2=0,
+                output_pump1=0
+            )
+
+        pump_live_status.config(
+            text="Pumps: STOPPED",
+            foreground=colors["red"]
+        )
+
+    def start_pumps():
+        power = pump_power.get()
+  
+        reactor_index = reactor_choice.get().split()[-1]
+
+        if not reactor_index.isdigit():
+            return
+
+        reactor_index = int(reactor_index) - 1
+
+        send_command(
+            reactor_index,
+            input_pump1=power,
+            input_pump2=power,
+            output_pump1=power
+        )
+
+        pump_live_status.config(
+            text="Pumps: RUNNING",
+            foreground=colors["green"]
+        )
+
+    def set_temperature():
+        temperature = simpledialog.askfloat(
+            "Set Temperature",
+            "Enter target temperature (°C):",
+            parent=root,
+            minvalue=20,
+            maxvalue=45
+        )
+
+        if temperature is None:
+            return
+
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is None:
+            tkinter.messagebox.showwarning(
+                "No Reactor Selected",
+                "Please select a reactor first."
+            )
+            return
+
+        target_temperature.set(temperature)
+
+        temperature_label.config(
+            text=f"Target Temperature: {temperature:.1f} °C"
+        )
+
+        reactors[reactor_index].targets["Temperature"] = temperature
+
+        send_command(
+            reactor_index,
+            temperature=temperature
+        )
+
+        temperature_commands.setdefault(
+            reactor_index,
+            []
+        ).append({
+            "time": time.time(),
+            "temperature": temperature
+        })
+
+        update_temperature_graph()
+
+    pump_power = tk.IntVar(value=50)
 
     pump_power_label = ttk.Label(
-        pump_frame,
-        text="Pump Power: 50%"
+        controls_frame,
+        text="Pump Power: 50%",
+        style="Card.TLabel"
     )
-
-    pump_power_label.pack()
-
-
-    # pump power slider
+    pump_power_label.pack(anchor="w", pady=(15, 0))
 
     pump_slider = tk.Scale(
-        pump_frame,
+        controls_frame,
         from_=50,
         to=100,
         orient="horizontal",
         resolution=1,
         variable=pump_power,
-        command=pump_power_changed
+        command=pump_power_changed,
+        bg=colors["card"],
+        fg=colors["navy"],
+        highlightthickness=0
     )
-
     pump_slider.pack(
         fill="x",
-        padx=20,
+        padx=5,
+        pady=5
+    )
+
+    temperature_label = ttk.Label(
+        controls_frame,
+        text="Target Temperature",
+        style="Card.TLabel"
+    )
+    temperature_label.pack(anchor="w", pady=(8, 0))
+
+    temperature_slider = tk.Scale(
+        controls_frame,
+        from_=20,
+        to=45,
+        orient="horizontal",
+        resolution=0.5,
+        variable=target_temperature,
+        command=temperature_changed,
+        bg=colors["card"],
+        fg=colors["navy"],
+        highlightthickness=0
+    )
+    temperature_slider.pack(
+        fill="x",
+        padx=5,
+        pady=5
+    )
+
+    temperature_button = ttk.Button(
+        controls_frame,
+        text="SET TEMPERATURE",
+        style="TButton",
+        command=set_temperature
+    )
+    temperature_button.pack(fill="x", pady=(5, 8))
+
+    pump_button_frame = ttk.Frame(controls_frame)
+    pump_button_frame.pack(fill="x")
+
+    start_button = ttk.Button(
+        pump_button_frame,
+        text="START PUMPS",
+        command=start_pumps, 
+        style="TButton"
+    )
+    start_button.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+    stop_button = ttk.Button(
+        pump_button_frame,
+        text="STOP PUMPS",
+        style="TButton",
+        command=stop_pumps
+    )
+    stop_button.pack(side="right", fill="x", expand=True, padx=(5, 0))
+
+    graph_frame = tk.Frame(
+        dashboard_tab,
+        bg=colors["card"],
+        padx=15,
         pady=10
     )
-
-
-    # pump range labels
-
-    pump_range_frame = ttk.Frame(pump_frame)
-
-    pump_range_frame.pack(
-        fill="x",
-        padx=20
-    )
-
-    ttk.Label(
-        pump_range_frame,
-        text="50%"
-    ).pack(side="left")
-
-    ttk.Label(
-        pump_range_frame,
-        text="100%"
-    ).pack(side="right")
-
-
-    # pump status
-
-    pump_status = ttk.Label(
-        pump_frame,
-        text="Pumps: READY"
-    )
-
-    pump_status.pack(
-        pady=(10, 0)
-    )
-
-
-    # temperature graph placeholder
-
-    temperature_frame = ttk.LabelFrame(
-        root,
-        text="Temperature",
-        padding=10
-    )
-
-    temperature_frame.pack(
+    graph_frame.pack(
         fill="both",
         expand=True,
+        pady=(15, 0)
+    )
+
+    ttk.Label(
+        graph_frame,
+        text="TEMPERATURE",
+        style="Header.TLabel"
+    ).pack(anchor="w")
+
+    try:
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+        temperature_figure = Figure(
+            figsize=(8, 3.2),
+            dpi=100
+        )
+        temperature_axis = temperature_figure.add_subplot(111)
+        temperature_axis.set_xlabel("Time (s)")
+        temperature_axis.set_ylabel("Temperature (°C)")
+        temperature_axis.grid(True, alpha=0.25)
+
+        temperature_canvas = FigureCanvasTkAgg(
+            temperature_figure,
+            master=graph_frame
+        )
+        temperature_canvas.get_tk_widget().pack(
+            fill="both",
+            expand=True
+        )
+    except ImportError:
+        temperature_figure = None
+        temperature_axis = None
+        temperature_canvas = None
+
+        ttk.Label(
+            graph_frame,
+            text="Install matplotlib with: py -m pip install matplotlib",
+            style="Card.TLabel"
+        ).pack(expand=True)
+
+    def get_selected_reactor_index():
+        value = reactor_choice.get().split()[-1]
+
+        if value.isdigit():
+            index = int(value) - 1
+
+            if 0 <= index < len(reactors):
+                return index
+
+        return None
+
+    def update_temperature_graph():
+        if temperature_axis is None:
+            return
+
+        temperature_axis.clear()
+        temperature_axis.set_xlabel("Time (s)")
+        temperature_axis.set_ylabel("Temperature (°C)")
+        temperature_axis.grid(True, alpha=0.25)
+
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is None:
+            temperature_canvas.draw_idle()
+            return
+
+        reactor = reactors[reactor_index]
+
+        if reactor.history:
+            start_time = reactor.history[0]["time"]
+
+            x_values = [
+                item["time"] - start_time
+                for item in reactor.history
+            ]
+
+            y_values = [
+                item["temp"]
+                for item in reactor.history
+            ]
+
+            temperature_axis.plot(
+                x_values,
+                y_values,
+                linewidth=2,
+                label=f"Reactor {reactor_index + 1}"
+            )
+
+            temperature_axis.legend(loc="upper left")
+
+            for command in temperature_commands.get(reactor_index, []):
+                command_x = command["time"] - start_time
+
+                if x_values and command_x >= x_values[0]:
+                    temperature_axis.axvline(
+                        command_x,
+                        linestyle="--",
+                        alpha=0.7
+                    )
+
+                    temperature_axis.text(
+                        command_x,
+                        temperature_axis.get_ylim()[1],
+                        f" {command['temperature']:.1f}°C",
+                        rotation=90,
+                        verticalalignment="top"
+                    )
+
+        temperature_figure.tight_layout()
+        temperature_canvas.draw_idle()
+
+    def update_dashboard():
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is not None:
+            reactor = reactors[reactor_index]
+
+            current_temp_label.config(
+                text=f"{reactor.temp:.1f} °C"
+            )
+
+            current_od_label.config(
+                text=f"{reactor.od:.3f}"
+            )
+
+            current_ph_label.config(
+                text=f"{reactor.ph:.2f}"
+            )
+
+            if reactor.connected:
+                connection_status.config(
+                    text="● CONNECTED",
+                    fg=colors["green"]
+                )
+            else:
+                connection_status.config(
+                    text="● DISCONNECTED",
+                    fg=colors["red"]
+                )
+
+            if reactor.pump_active:
+                pump_live_status.config(
+                    text="Pumps: RUNNING",
+                    foreground=colors["green"]
+                )
+            else:
+                pump_live_status.config(
+                    text="Pumps: STOPPED",
+                    foreground=colors["red"]
+                )
+
+        update_temperature_graph()
+        root.after(500, update_dashboard)
+
+    def reactor_changed(event=None):
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is not None and reactor_index < len(reactors):
+            target_temperature.set(
+                reactors[reactor_index].targets["Temperature"]
+            )
+
+    reactor_menu.bind("<<ComboboxSelected>>", reactor_changed)
+
+    # initial od setup
+
+    calibration_header = tk.Frame(
+        setup_tab,
+        bg=colors["navy"],
+        padx=20,
+        pady=15
+    )
+    calibration_header.pack(fill="x", pady=(0, 15))
+
+    tk.Label(
+        calibration_header,
+        text="OD CALIBRATION",
+        bg=colors["navy"],
+        fg="white",
+        font=("Arial", 18, "bold")
+    ).pack(anchor="w")
+
+    tk.Label(
+        calibration_header,
+        bg=colors["navy"],
+        fg="#DCE6F0",
+        font=("Arial", 10)
+    ).pack(anchor="w", pady=(3, 0))
+
+    initial_setup_frame = tk.Frame(
+        setup_tab,
+        bg=colors["card"],
+        padx=20,
+        pady=20
+    )
+    initial_setup_frame.pack(fill="both", expand=True)
+
+    # collect blank OD
+
+    def collect_blank_od_setup():
+        collect_blank_od()
+
+    blank_od_button = ttk.Button(
+        initial_setup_frame,
+        text="Collect OD of blank vial with no vial (nothing in the vial holder)",
+        command=collect_blank_od_setup
+    )
+    blank_od_button.pack(
+        fill="x",
+        pady=8
+    )
+
+    # collect OD with vial
+
+    def collect_vial_od_setup():
+        collect_vial_od()
+
+    vial_od_button = ttk.Button(
+        initial_setup_frame,
+        text="Collect OD with vial inside bioreactor with nothing in the vial",
+        command=collect_vial_od_setup
+    )
+    vial_od_button.pack(
+        fill="x",
+        pady=8
+    )
+
+    # reference collection
+
+    def reference_collection_setup():
+        reference_collection()
+
+    reference_button = ttk.Button(
+        initial_setup_frame,
+        text="Reference Collection",
+        command=reference_collection_setup
+    )
+    reference_button.pack(
+        fill="x",
+        pady=8
+    )
+
+    calibration_status = tk.Label(
+        initial_setup_frame,
+        text="OD Calibration: 0/3 complete",
+        bg=colors["card"],
+        fg=colors["orange"],
+        font=("Arial", 12, "bold")
+    )
+    calibration_status.pack(
+        pady=20
+    )
+
+    ttk.Button(
+        initial_setup_frame,
+        text="BACK TO DASHBOARD",
+        command=lambda: notebook.select(dashboard_tab)
+    ).pack(pady=10)
+
+    spectro_history = []
+
+    spectro_header = tk.Frame(
+        spectrophotometer_tab,
+        bg=colors["navy"],
+        padx=20,
+        pady=20
+    )
+    spectro_header.pack(fill="x", pady=(0, 15))
+
+    tk.Label(
+        spectro_header,
+        text="SPECTROPHOTOMETER",
+        bg=colors["navy"],
+        fg="white",
+        font=("Arial", 20, "bold")
+    ).pack(anchor="w")
+
+    tk.Label(
+        spectro_header,
+        bg=colors["navy"],
+        fg="#DCE6F0",
+        font=("Arial", 10)
+    ).pack(anchor="w", pady=(3, 0))
+
+    spectro_content = tk.Frame(
+        spectrophotometer_tab,
+        bg=colors["card"],
         padx=30,
-        pady=10
+        pady=30
     )
+    spectro_content.pack(fill="both", expand=True)
+
+    spectro_reading_label = tk.Label(
+        spectro_content,
+        text="--",
+        bg=colors["card"],
+        fg=colors["navy"],
+        font=("Arial", 32, "bold")
+    )
+    spectro_reading_label.pack(pady=(20, 5))
+
+    # spectrophotometer graph
+    try:
+        spectro_figure = Figure(
+            figsize=(8, 3.2),
+            dpi=100
+        )
+
+        spectro_axis = spectro_figure.add_subplot(111)
+
+        spectro_axis.set_xlabel("Time (s)")
+        spectro_axis.set_ylabel("Optical Density (OD)")
+        spectro_axis.set_title("Spectrophotometer OD Over Time")
+        spectro_axis.grid(True, alpha=0.25)
+
+        spectro_canvas = FigureCanvasTkAgg(
+            spectro_figure,
+            master=spectro_content
+        )
+
+        spectro_canvas.get_tk_widget().pack(
+            fill="both",
+            expand=True,
+            pady=15
+        )
+
+    except ImportError:
+        spectro_figure = None
+        spectro_axis = None
+        spectro_canvas = None
+
+        tk.Label(
+            spectro_content,
+            text="Install matplotlib with: py -m pip install matplotlib",
+            bg=colors["card"],
+            fg=colors["dark_grey"]
+        ).pack(expand=True)
+
+    tk.Label(
+        spectro_content,
+        text="Spectrophotometer Reading",
+        bg=colors["card"],
+        fg=colors["dark_grey"],
+        font=("Arial", 11)
+    ).pack()
+
+    def update_spectrophotometer_graph():
+
+        if spectro_axis is None:
+            return
+
+        spectro_axis.clear()
+
+        spectro_axis.set_xlabel("Time (s)")
+        spectro_axis.set_ylabel("Optical Density (OD)")
+        spectro_axis.set_title("Spectrophotometer OD Over Time")
+        spectro_axis.grid(True, alpha=0.25)
+
+        if spectro_history:
+
+            start_time = spectro_history[0]["time"]
+
+            x_values = [
+                item["time"] - start_time
+                for item in spectro_history
+            ]
+
+            y_values = [
+                item["od"]
+                for item in spectro_history
+            ]
+
+            spectro_axis.plot(
+                x_values,
+                y_values,
+                marker="o",
+                linewidth=2,
+                label="OD"
+            )
+
+            spectro_axis.legend(loc="upper left")
+
+        spectro_figure.tight_layout()
+        spectro_canvas.draw_idle()
 
 
-    temperature_placeholder = ttk.Label(
-        temperature_frame,
-        text=(
-            "temp graph will be added here"
-        ),
-        justify="center"
-    )
+    def collect_spectrophotometer_od():
 
-    temperature_placeholder.pack(
-        expand=True
-    )
+        print("Collecting spectrophotometer OD")
+
+        # temporary test reading
+        # replace this value with the actual spectrophotometer reading later
+        od_value = 0.5
+
+        spectro_reading_label.config(
+            text=f"{od_value:.3f}"
+        )
+
+        spectro_history.append({
+            "time": time.time(),
+            "od": od_value
+        })
+
+        update_spectrophotometer_graph()
+
+    ttk.Button(
+        spectro_content,
+        text="COLLECT OD",
+        style="TButton",
+        command=collect_spectrophotometer_od
+    ).pack(fill="x", pady=25)
+
+    ttk.Button(
+        spectro_content,
+        text="BACK TO DASHBOARD",
+        command=lambda: notebook.select(dashboard_tab)
+    ).pack()
+
+    update_calibration_status()
+    update_dashboard()
 
 
 # main
@@ -459,7 +1475,16 @@ if __name__ == "__main__":
     root = tk.Tk()
 
     root.title("Bioreactor Dashboard")
-    root.geometry("900x700")
+    root.geometry("1100x800")
+    root.minsize(900, 700)
+
+    connect_serial()
+
+    if connections:
+        threading.Thread(
+            target=serial_thread,
+            daemon=True
+        ).start()
 
     create_dashboard(root)
 
