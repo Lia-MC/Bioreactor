@@ -16,7 +16,7 @@ import random
 
 # constants
 
-SIMULATION_MODE = True # change this to False if you don't want to simulate 
+SIMULATION_MODE = True # change this to False if not simulating
 PORTS = [
     "COM3",
     "COM4",
