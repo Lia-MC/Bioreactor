@@ -29,6 +29,7 @@ PORTS = [
 ]
 
 BAUDRATE = 115200
+TEMPERATURE_WARNING_OFFSET = 2.0
 
 connections = []
 reactors = []
@@ -83,6 +84,7 @@ class Bioreactor:
         self.last_error = None
         self.last_valid_data_time = None
         self.connected = True
+        self.temperature_warning = False
 
         self.targets = {
             "Temperature": 37.0,
@@ -1076,7 +1078,7 @@ def create_dashboard(root):
     )
 
 
-    # Pump status
+    # pump status
     pump_reading_frame = tk.Frame(
         readings_frame,
         bg=colors["card"]
@@ -1811,6 +1813,8 @@ def create_dashboard(root):
                 text=f"{reactor.temp:.1f} °C"
             )
 
+            check_temperature_warning(reactor)
+
             current_od_label.config(
                 text=f"{reactor.od:.3f}"
             )
@@ -2260,6 +2264,34 @@ def create_dashboard(root):
     ).pack()
 
     update_calibration_status()
+
+    def check_temperature_warning(reactor):
+
+        warning_temperature = (
+            reactor.targets["Temperature"]
+            + TEMPERATURE_WARNING_OFFSET
+        )
+
+        if reactor.temp > warning_temperature:
+
+            if not reactor.temperature_warning:
+
+                reactor.temperature_warning = True
+
+                tkinter.messagebox.showwarning(
+                    "HIGH TEMPERATURE WARNING",
+                    f"Reactor {reactor.id} temperature is "
+                    f"{reactor.temp:.1f} °C.\n\n"
+                    f"Target temperature: "
+                    f"{reactor.targets['Temperature']:.1f} °C\n"
+                    f"Warning threshold: "
+                    f"{warning_temperature:.1f} °C"
+                )
+
+        else:
+
+            reactor.temperature_warning = False
+
     update_dashboard()
 
 
