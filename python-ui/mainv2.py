@@ -172,6 +172,9 @@ def parse_data(reactor_number, line):
         if not isinstance(data, dict):
             raise ValueError("JSON data is not a dictionary")
 
+        if "time" in data:
+            reactor.time = data["time"]
+
         if "Fan PWM" in data:
             reactor.fan_pwm = data["Fan PWM"]
 
@@ -196,7 +199,11 @@ def parse_data(reactor_number, line):
         if "pH" in data:
             reactor.ph = float(data["pH"])
 
-        reactor.time = time.time()
+        if "time" in data:
+            reactor.time = float(data["time"])
+        else:
+            reactor.time = time.time()
+        
         reactor.last_valid_data_time = reactor.time
         reactor.connected = True
         reactor.last_error = None
@@ -1804,16 +1811,16 @@ def create_dashboard(root):
         temperature_canvas.draw_idle()
 
     def update_dashboard():
+
         reactor_index = get_selected_reactor_index()
 
         if reactor_index is not None:
+
             reactor = reactors[reactor_index]
 
             current_temp_label.config(
                 text=f"{reactor.temp:.1f} °C"
             )
-
-            check_temperature_warning(reactor)
 
             current_od_label.config(
                 text=f"{reactor.od:.3f}"
@@ -1823,29 +1830,26 @@ def create_dashboard(root):
                 text=f"{reactor.ph:.2f}"
             )
 
-            if reactor.connected:
-                connection_status.config(
-                    text="● CONNECTED",
-                    fg=colors["green"]
-                )
-            else:
-                connection_status.config(
-                    text="● DISCONNECTED",
-                    fg=colors["red"]
-                )
+            spectro_history.clear()
 
-            if reactor.pump_active:
-                pump_live_status.config(
-                    text="Pumps: RUNNING",
-                    foreground=colors["green"]
-                )
-            else:
-                pump_live_status.config(
-                    text="Pumps: STOPPED",
-                    foreground=colors["red"]
-                )
+            if reactors:
+                reactor = reactors[0]
+
+                for reading in reactor.history:
+                    spectro_history.append({
+                        "time": reading["time"],
+                        "od": reading["od"]
+                    })
+
+                if spectro_history:
+                    spectro_reading_label.config(
+                        text=f"{spectro_history[-1]['od']:.3f}"
+                    )
+
+                update_spectrophotometer_graph()
 
         update_temperature_graph()
+
         root.after(500, update_dashboard)
 
     def reactor_changed(event=None):
@@ -2233,20 +2237,24 @@ def create_dashboard(root):
 
     def collect_spectrophotometer_od():
 
-        print("Collecting spectrophotometer OD")
+        if not reactors:
+            return
 
-        # temporary test reading
-        # replace this value with the actual spectrophotometer reading later
-        od_value = 0.5
+        reactor = reactors[0]
 
-        spectro_reading_label.config(
-            text=f"{od_value:.3f}"
-        )
+        spectro_history.clear()
 
-        spectro_history.append({
-            "time": time.time(),
-            "od": od_value
-        })
+        for reading in reactor.history:
+            spectro_history.append({
+                "time": reading["time"],
+                "od": reading["od"]
+            })
+
+        if spectro_history:
+            latest_od = spectro_history[-1]["od"]
+            spectro_reading_label.config(
+                text=f"{latest_od:.3f}"
+            )
 
         update_spectrophotometer_graph()
 
