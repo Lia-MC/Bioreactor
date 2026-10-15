@@ -161,6 +161,10 @@ def parse_data(reactor_number, line):
         if not line:
             raise ValueError("Empty serial message")
 
+        if not line.startswith("{"):
+            print("Arduino:", line)
+            return
+
         data = json.loads(line)
 
         print("Received JSON:", data)
@@ -380,6 +384,30 @@ def send_command(
     except Exception as e:
         print(f"Failed to send command: {e}")
 
+def send_text_command(reactor_number, text): # send raw text command
+
+    if reactor_number is None:
+        print("Invalid reactor number.")
+        return False
+
+    if SIMULATION_MODE:
+        print(f"[SIM] Reactor {reactor_number + 1}: {text}")
+        return True
+
+    if reactor_number < 0 or reactor_number >= len(connections):
+        print("Invalid reactor number.")
+        return False
+
+    try:
+        msg = text + "\n"
+        connections[reactor_number].write(msg.encode("utf-8"))
+        print(f"Sent: {text}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send command: {e}")
+        return False
+
 # create dashboard
 
 def create_dashboard(root):
@@ -515,6 +543,14 @@ def create_dashboard(root):
 
     temperature_commands = {}
 
+    def calibration_warning(parent):
+        answer = tkinter.messagebox.askyesno(
+            "OD Calibration Required",
+            "OD calibration is not complete.\n\nGo to the calibration tab now?",
+            parent=parent
+        )
+        return "calibrate" if answer else "cancel"    
+
     def calibration_complete():
         return all(calibration_steps.values())
 
@@ -545,6 +581,14 @@ def create_dashboard(root):
 
     def collect_blank_od():
         print("Collecting OD of blank vial holder")
+
+        if not send_text_command(get_selected_reactor_index(), "#calibrationstep1"):
+            tkinter.messagebox.showwarning(
+                "Calibration Failed",
+                "Could not send command to the reactor."
+            )
+            return
+
         calibration_steps["blank"] = True
         blank_od_button.config(
             state="disabled",
@@ -554,6 +598,14 @@ def create_dashboard(root):
 
     def collect_vial_od():
         print("Collecting OD with empty vial")
+
+        if not send_text_command(get_selected_reactor_index(), "#calibrationstep2"):
+            tkinter.messagebox.showwarning(
+                "Calibration Failed",
+                "Could not send command to the reactor."
+            )
+            return
+
         calibration_steps["vial"] = True
         vial_od_button.config(
             state="disabled",
@@ -563,6 +615,14 @@ def create_dashboard(root):
 
     def reference_collection():
         print("Starting reference collection")
+
+        if not send_text_command(get_selected_reactor_index(), "#calibrationstep3"):
+            tkinter.messagebox.showwarning(
+                "Calibration Failed",
+                "Could not send command to the reactor."
+            )
+            return
+
         calibration_steps["reference"] = True
         reference_button.config(
             state="disabled",
