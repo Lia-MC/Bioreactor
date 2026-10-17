@@ -41,6 +41,10 @@ class Bioreactor:
         self.temp = 0
         self.temp_target = 0
         self.od = 0
+        self.od_raw = None   
+        self.blank_set = False 
+        self.blank_count = 0 
+
         self.ph = 0
         # self.ph_control = {
         #     "initial_volume_ml": 0.0,
@@ -193,8 +197,17 @@ def parse_data(reactor_number, line):
         if "Temperature Target" in data:
             reactor.temp_target = float(data["Temperature Target"])
 
-        if "OD" in data:
+        if data.get("OD") is not None:
             reactor.od = float(data["OD"])
+
+        if data.get("OD Raw") is not None:
+            reactor.od_raw = float(data["OD Raw"])
+
+        if "Blank Set" in data:
+            reactor.blank_set = bool(data["Blank Set"])
+
+        if "Blank Count" in data:
+            reactor.blank_count = int(data["Blank Count"])
 
         if "pH" in data:
             reactor.ph = float(data["pH"])
@@ -211,7 +224,8 @@ def parse_data(reactor_number, line):
         reactor.history.append({
             "time": reactor.time,
             "temp": reactor.temp,
-            "od": reactor.od
+            "od": reactor.od,
+            "od_raw": reactor.od_raw
         })
 
     except json.JSONDecodeError:
@@ -322,7 +336,8 @@ def send_command(
     input_pump1=None,
     input_pump2=None,
     output_pump1=None,
-    stirring_fan=None
+    stirring_fan=None,
+    action=None
 ):
 
     if SIMULATION_MODE:
@@ -374,6 +389,9 @@ def send_command(
     if stirring_fan is not None:
         command["Stirring Fan"] = stirring_fan
 
+    if action is not None:
+        command["Command"] = action    
+
     try:
         msg = json.dumps(command) + "\n"
 
@@ -422,14 +440,7 @@ def create_dashboard(root):
         padx=20,
         pady=20
     )
-
-    # dashboard_frame.grid_columnconfigure(0, weight=1)
-    # dashboard_frame.grid_columnconfigure(1, weight=1)
-    # dashboard_frame.grid_columnconfigure(2, weight=2)
-
-    # dashboard_frame.grid_rowconfigure(0, weight=1)
-    # dashboard_frame.grid_rowconfigure(1, weight=1)
-
+    
     colors = {
         "background": "#F4F6F8",
         "card": "#FFFFFF",
@@ -549,7 +560,7 @@ def create_dashboard(root):
             "OD calibration is not complete.\n\nGo to the calibration tab now?",
             parent=parent
         )
-        return "calibrate" if answer else "cancel"    
+        return "calibrate" if answer else "cancel"
 
     def calibration_complete():
         return all(calibration_steps.values())
@@ -579,33 +590,75 @@ def create_dashboard(root):
 
         return False
 
-    def collect_blank_od():
-        print("Collecting OD of blank vial holder")
+    # blank request waiting for the Arduino to confirm
+    pending_blank = {}
 
-        if not send_text_command(get_selected_reactor_index(), "#calibrationstep1"):
+    def collect_blank_od():
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is None:
             tkinter.messagebox.showwarning(
-                "Calibration Failed",
-                "Could not send command to the reactor."
+                "No Reactor Connected",
+                "Connect a reactor before collecting the blank."
             )
             return
 
-        calibration_steps["blank"] = True
+        print("Collecting blank OD (plain media)")
+
+        pending_blank[reactor_index] = (
+            reactors[reactor_index].blank_count,
+            time.time()
+        )
+
+        send_command(reactor_index, action="Blank")
+
         blank_od_button.config(
             state="disabled",
-            text="✓ Blank OD collected"
+            text="Collecting blank... keep the vial still"
         )
-        update_calibration_status()
+
+    def check_blank_status():
+        # shows the blank as done once the Arduino confirms it
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is None:
+            return
+
+        reactor = reactors[reactor_index]
+
+        if reactor_index in pending_blank:
+            count_when_pressed, pressed_time = pending_blank[reactor_index]
+
+            if reactor.blank_count > count_when_pressed:
+                del pending_blank[reactor_index]
+                print("Blank confirmed by Arduino")
+
+            elif time.time() - pressed_time > 20:
+                # no confirmation - the Arduino prints why
+                del pending_blank[reactor_index]
+                blank_od_button.config(
+                    state="normal",
+                    text="Blank NOT collected - check the console, then press to retry"
+                )
+                return
+
+            else:
+                return
+
+        if reactor.blank_set and not calibration_steps["blank"]:
+            calibration_steps["blank"] = True
+            update_calibration_status()
+
+        if reactor.blank_set:
+            blank_od_button.config(
+                state="normal",
+                text="✓ Blank collected (plain media) - press again to redo"
+            )
+        else:
+            blank_od_button.config(state="normal")
 
     def collect_vial_od():
         print("Collecting OD with empty vial")
-
-        if not send_text_command(get_selected_reactor_index(), "#calibrationstep2"):
-            tkinter.messagebox.showwarning(
-                "Calibration Failed",
-                "Could not send command to the reactor."
-            )
-            return
-
         calibration_steps["vial"] = True
         vial_od_button.config(
             state="disabled",
@@ -615,14 +668,6 @@ def create_dashboard(root):
 
     def reference_collection():
         print("Starting reference collection")
-
-        if not send_text_command(get_selected_reactor_index(), "#calibrationstep3"):
-            tkinter.messagebox.showwarning(
-                "Calibration Failed",
-                "Could not send command to the reactor."
-            )
-            return
-
         calibration_steps["reference"] = True
         reference_button.config(
             state="disabled",
@@ -646,13 +691,7 @@ def create_dashboard(root):
         text="BIOREACTOR DASHBOARD",
         style="Title.TLabel"
     ).pack(anchor="w")
-
-    # ttk.Label(
-    #     header_text,
-    #     style="Subtitle.TLabel"#,
-    #     # text="Real-time monitoring and control of your bioreactors"
-    # ).pack(anchor="w", pady=(3, 0))
-
+    
     temperature_button = ttk.Button(
         header,
         text="TEMPERATURE GRAPH",
@@ -726,127 +765,6 @@ def create_dashboard(root):
         pady=(0, 10)
     )
 
-    # readings_frame = tk.Frame(
-    #     dashboard_tab,
-    #     bg=colors["card"],
-    #     padx=20,
-    #     pady=15
-    # )
-    # readings_frame.pack(
-    #     fill="x",
-    #     pady=(0, 15)
-    # )
-
-    # ttk.Label(
-    #     readings_frame,
-    #     text="LIVE READINGS",
-    #     style="Header.TLabel"
-    # ).pack(anchor="w")
-
-    # readings_row = tk.Frame(
-    #     readings_frame,
-    #     bg=colors["card"]
-    # )
-    # readings_row.pack(
-    #     fill="x",
-    #     pady=(10, 0)
-    # )
-
-    # temperature_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # temperature_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # current_temp_label = ttk.Label(
-    #     temperature_reading_frame,
-    #     text="--.- °C",
-    #     style="Value.TLabel"
-    # )
-    # current_temp_label.pack(anchor="w")
-
-    # ttk.Label(
-    #     temperature_reading_frame,
-    #     text="Current Temperature",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
-
-    # od_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # od_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # current_od_label = ttk.Label(
-    #     od_reading_frame,
-    #     text="--",
-    #     style="Value.TLabel"
-    # )
-    # current_od_label.pack(anchor="w")
-
-    # ttk.Label(
-    #     od_reading_frame,
-    #     text="Optical Density",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
-
-    # ph_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # ph_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # current_ph_label = ttk.Label(
-    #     ph_reading_frame,
-    #     text="--.--",
-    #     style="Value.TLabel"
-    # )
-    # current_ph_label.pack(anchor="w")
-
-    # ttk.Label(
-    #     ph_reading_frame,
-    #     text="Current pH",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
-
-    # pump_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # pump_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # pump_live_status = ttk.Label(
-    #     pump_reading_frame,
-    #     text="Pumps: STOPPED",
-    #     style="Status.TLabel"
-    # )
-    # pump_live_status.pack(anchor="w")
-
-    # ttk.Label(
-    #     pump_reading_frame,
-    #     text="Pump Status",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
     controls_frame = tk.Frame(
         main_cards,
         bg=colors["card"],
@@ -886,126 +804,6 @@ def create_dashboard(root):
         fill="x",
         pady=(10, 5)
     )
-
-    # readings_frame = tk.Frame(
-    #     dashboard_tab,
-    #     bg=colors["card"],
-    #     padx=20,
-    #     pady=15
-    # )
-    # readings_frame.pack(
-    #     fill="x",
-    #     pady=(0, 15)
-    # )
-
-    # ttk.Label(
-    #     readings_frame,
-    #     text="LIVE READINGS",
-    #     style="Header.TLabel"
-    # ).pack(anchor="w")
-
-    # readings_row = tk.Frame(
-    #     readings_frame,
-    #     bg=colors["card"]
-    # )
-    # readings_row.pack(
-    #     fill="x"
-    # )
-
-    # temperature_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # temperature_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # current_temp_label = ttk.Label(
-    #     temperature_reading_frame,
-    #     text="--.- °C",
-    #     style="Value.TLabel"
-    # )
-    # current_temp_label.pack(anchor="w")
-
-    # ttk.Label(
-    #     temperature_reading_frame,
-    #     text="Current Temperature",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
-
-    # od_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # od_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # current_od_label = ttk.Label(
-    #     od_reading_frame,
-    #     text="--",
-    #     style="Value.TLabel"
-    # )
-    # current_od_label.pack(anchor="w")
-
-    # ttk.Label(
-    #     od_reading_frame,
-    #     text="Optical Density",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
-
-    # ph_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # ph_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # current_ph_label = ttk.Label(
-    #     ph_reading_frame,
-    #     text="--.--",
-    #     style="Value.TLabel"
-    # )
-    # current_ph_label.pack(anchor="w")
-
-    # ttk.Label(
-    #     ph_reading_frame,
-    #     text="Current pH",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
-
-
-    # pump_reading_frame = tk.Frame(
-    #     readings_row,
-    #     bg=colors["card"]
-    # )
-    # pump_reading_frame.pack(
-    #     side="left",
-    #     fill="x",
-    #     expand=True
-    # )
-
-    # pump_live_status = ttk.Label(
-    #     pump_reading_frame,
-    #     text="Pumps: STOPPED",
-    #     style="Status.TLabel"
-    # )
-    # pump_live_status.pack(anchor="w")
-
-    # ttk.Label(
-    #     pump_reading_frame,
-    #     text="Pump Status",
-    #     style="Card.TLabel"
-    # ).pack(anchor="w")
 
     top_controls_frame.grid_columnconfigure(0, weight=1)
     top_controls_frame.grid_columnconfigure(1, weight=1)
@@ -1078,6 +876,13 @@ def create_dashboard(root):
 
 
     # OD
+    od_raw_label = ttk.Label(
+        readings_frame,
+        text="OD Raw: --   (avg of last 10: --)",
+        style="Card.TLabel"
+    )
+    od_raw_label.pack(anchor="w", pady=(0, 3))
+
     od_reading_frame = tk.Frame(
         readings_frame,
         bg=colors["card"]
@@ -1458,7 +1263,10 @@ def create_dashboard(root):
         volume_l = moles_of_base / concentration
         return volume_l * 1000
 
+    pumps_running = set()
+
     def stop_pumps():
+        pumps_running.clear()
         print("STOP PUMPS")
 
         for reactor_index in range(len(connections)):
@@ -1484,6 +1292,8 @@ def create_dashboard(root):
 
         reactor_index = int(reactor_index) - 1
 
+        pumps_running.add(reactor_index)
+
         send_command(
             reactor_index,
             input_pump1=power,
@@ -1508,6 +1318,9 @@ def create_dashboard(root):
         if temperature is None:
             return
 
+        apply_temperature(temperature)
+
+    def apply_temperature(temperature):
         reactor_index = get_selected_reactor_index()
 
         if reactor_index is None:
@@ -1538,7 +1351,33 @@ def create_dashboard(root):
             "temperature": temperature
         })
 
-        # update_temperature_graph()
+        update_temperature_graph()
+
+    def pump_slider_released(event=None):
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is None or reactor_index not in pumps_running:
+            return
+
+        power = pump_power.get()
+        send_command(
+            reactor_index,
+            input_pump1=power,
+            input_pump2=power,
+            output_pump1=power
+        )
+
+    def temperature_slider_released(event=None):
+        temperature = target_temperature.get()
+        reactor_index = get_selected_reactor_index()
+
+        if (
+            reactor_index is not None
+            and reactors[reactor_index].targets["Temperature"] == temperature
+        ):
+            return
+
+        apply_temperature(temperature)
 
     # temp controls
 
@@ -1581,6 +1420,8 @@ def create_dashboard(root):
         padx=5,
         pady=5
     )
+
+    temperature_slider.bind("<ButtonRelease-1>", temperature_slider_released)
 
     temperature_button = ttk.Button(
         temperature_controls_frame,
@@ -1637,6 +1478,7 @@ def create_dashboard(root):
         pady=5
     )
 
+    pump_slider.bind("<ButtonRelease-1>", pump_slider_released)
 
     # pump control buttons
     pump_button_frame = ttk.Frame(
@@ -1675,57 +1517,6 @@ def create_dashboard(root):
         expand=True,
         padx=(5, 0)
     )
-
-    # graph_frame = tk.Frame(
-    #     main_cards,
-    #     bg=colors["card"],
-    #     padx=15,
-    #     pady=10
-    # )
-    # graph_frame.pack(
-    #     side="left",
-    #     fill="both",
-    #     expand=True,
-    #     padx=(0, 8)
-    # )
-
-    # ttk.Label(
-    #     graph_frame,
-    #     text="TEMPERATURE",
-    #     style="Header.TLabel"
-    # ).pack(anchor="w")
-
-    # try:
-    #     from matplotlib.figure import Figure
-    #     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-
-    #     temperature_figure = Figure(
-    #         figsize=(8, 3.2),
-    #         dpi=100
-    #     )
-    #     temperature_axis = temperature_figure.add_subplot(111)
-    #     temperature_axis.set_xlabel("Time (s)")
-    #     temperature_axis.set_ylabel("Temperature (°C)")
-    #     temperature_axis.grid(True, alpha=0.25)
-
-    #     temperature_canvas = FigureCanvasTkAgg(
-    #         temperature_figure,
-    #         master=graph_frame
-    #     )
-    #     temperature_canvas.get_tk_widget().pack(
-    #         fill="both",
-    #         expand=True
-    #     )
-    # except ImportError:
-    #     temperature_figure = None
-    #     temperature_axis = None
-    #     temperature_canvas = None
-
-    #     ttk.Label(
-    #         graph_frame,
-    #         text="Install matplotlib with: py -m pip install matplotlib",
-    #         style="Card.TLabel"
-    #     ).pack(expand=True)
 
     def get_selected_reactor_index():
         value = reactor_choice.get().split()[-1]
@@ -1861,50 +1652,147 @@ def create_dashboard(root):
                 loc="upper left"
             )
 
-
         temperature_figure.tight_layout()
-
         temperature_canvas.draw_idle()
+
+    def make_od_graph(parent):
+        try:
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        except ImportError:
+            ttk.Label(
+                parent,
+                text="Install matplotlib with: py -m pip install matplotlib",
+                style="Card.TLabel"
+            ).pack(expand=True)
+            return None
+
+        figure = Figure(figsize=(8, 3), dpi=100)
+        od_axis = figure.add_subplot(111)
+        raw_axis = od_axis.twinx()
+
+        canvas = FigureCanvasTkAgg(figure, master=parent)
+        canvas.get_tk_widget().pack(fill="both", expand=True, pady=10)
+
+        return {
+            "figure": figure,
+            "od_axis": od_axis,
+            "raw_axis": raw_axis,
+            "canvas": canvas
+        }
+
+    def update_od_graph(graph, points=None):
+        if graph is None:
+            return
+
+        od_axis = graph["od_axis"]
+        raw_axis = graph["raw_axis"]
+
+        od_axis.clear()
+        raw_axis.clear()
+        od_axis.set_xlabel("Time (s)")
+        od_axis.set_ylabel("OD", color=colors["blue"])
+        raw_axis.set_ylabel("OD Raw", color=colors["orange"])
+        raw_axis.yaxis.set_label_position("right")
+        od_axis.grid(True, alpha=0.25)
+
+        reactor_index = get_selected_reactor_index()
+
+        if reactor_index is not None and reactors[reactor_index].history:
+            history = reactors[reactor_index].history
+            start_time = history[0]["time"]
+
+            od_axis.plot(
+                [item["time"] - start_time for item in history],
+                [item["od"] for item in history],
+                color=colors["blue"],
+                linewidth=1.5,
+                label="OD"
+            )
+
+            raw_history = [
+                item for item in history
+                if item.get("od_raw") is not None
+            ]
+
+            if raw_history:
+                raw_axis.plot(
+                    [item["time"] - start_time for item in raw_history],
+                    [item["od_raw"] for item in raw_history],
+                    color=colors["orange"],
+                    linewidth=1.5,
+                    label="OD Raw"
+                )
+
+            # points recorded with COLLECT OD
+            if points:
+                od_axis.plot(
+                    [point["time"] - start_time for point in points],
+                    [point["od"] for point in points],
+                    linestyle="none",
+                    marker="o",
+                    markersize=8,
+                    color=colors["navy"],
+                    label="Collected"
+                )
+
+            lines = od_axis.get_lines() + raw_axis.get_lines()
+            od_axis.legend(
+                lines,
+                [line.get_label() for line in lines],
+                loc="upper left"
+            )
+
+        graph["figure"].tight_layout()
+        graph["canvas"].draw_idle()
 
     def update_dashboard():
 
         reactor_index = get_selected_reactor_index()
 
         if reactor_index is not None:
-
             reactor = reactors[reactor_index]
 
-            current_temp_label.config(
-                text=f"{reactor.temp:.1f} °C"
-            )
+            current_temp_label.config(text=f"{reactor.temp:.1f} °C")
+            current_od_label.config(text=f"{reactor.od:.3f}")
+            current_ph_label.config(text=f"{reactor.ph:.2f}")
 
-            current_od_label.config(
-                text=f"{reactor.od:.3f}"
-            )
+            recent_raw = [
+                item["od_raw"]
+                for item in reactor.history[-10:]
+                if item.get("od_raw") is not None
+            ]
 
-            current_ph_label.config(
-                text=f"{reactor.ph:.2f}"
-            )
+            if reactor.od_raw is not None and recent_raw:
+                average_raw = sum(recent_raw) / len(recent_raw)
+                od_raw_label.config(
+                    text=f"OD Raw: {reactor.od_raw:.4f}   "
+                         f"(avg of last {len(recent_raw)}: {average_raw:.4f})"
+                )
 
-            spectro_history.clear()
+            if reactor.connected:
+                connection_status.config(text="● CONNECTED", fg=colors["green"])
+            else:
+                connection_status.config(text="● DISCONNECTED", fg=colors["red"])
 
-            if reactors:
-                reactor = reactors[0]
+            if reactor.pump_active:
+                pump_live_status.config(text="Pumps: RUNNING", foreground=colors["green"])
+            else:
+                pump_live_status.config(text="Pumps: STOPPED", foreground=colors["red"])
 
-                for reading in reactor.history:
-                    spectro_history.append({
-                        "time": reading["time"],
-                        "od": reading["od"]
-                    })
+            check_temperature_warning(reactor)
 
-                if spectro_history:
-                    spectro_reading_label.config(
-                        text=f"{spectro_history[-1]['od']:.3f}"
-                    )
+        check_blank_status()
 
-                update_spectrophotometer_graph()
+        # only redraw the graph on the tab being looked at
+        current_tab = notebook.select()
 
-        update_temperature_graph()
+        if current_tab == str(temperature_tab):
+            update_temperature_graph()
+        elif current_tab == str(spectrophotometer_tab):
+            update_od_graph(spectro_graph, spectro_points)
+        elif current_tab == str(setup_tab):
+            update_od_graph(calibration_graph)
 
         root.after(500, update_dashboard)
 
@@ -2012,6 +1900,8 @@ def create_dashboard(root):
         text="BACK TO DASHBOARD",
         command=lambda: notebook.select(dashboard_tab)
     ).pack(pady=10)
+
+    calibration_graph = make_od_graph(initial_setup_frame)
 
     # temperature tab
 
@@ -2163,9 +2053,6 @@ def create_dashboard(root):
         pady=(10, 0)
     )
 
-
-    spectro_history = []
-
     spectro_header = tk.Frame(
         spectrophotometer_tab,
         bg=colors["navy"],
@@ -2204,115 +2091,62 @@ def create_dashboard(root):
         fg=colors["navy"],
         font=("Arial", 32, "bold")
     )
+
     spectro_reading_label.pack(pady=(20, 5))
 
-    # spectrophotometer graph
-    try:
-        spectro_figure = Figure(
-            figsize=(8, 3.2),
-            dpi=100
-        )
-
-        spectro_axis = spectro_figure.add_subplot(111)
-
-        spectro_axis.set_xlabel("Time (s)")
-        spectro_axis.set_ylabel("Optical Density (OD)")
-        spectro_axis.set_title("Spectrophotometer OD Over Time")
-        spectro_axis.grid(True, alpha=0.25)
-
-        spectro_canvas = FigureCanvasTkAgg(
-            spectro_figure,
-            master=spectro_content
-        )
-
-        spectro_canvas.get_tk_widget().pack(
-            fill="both",
-            expand=True,
-            pady=15
-        )
-
-    except ImportError:
-        spectro_figure = None
-        spectro_axis = None
-        spectro_canvas = None
-
-        tk.Label(
-            spectro_content,
-            text="Install matplotlib with: py -m pip install matplotlib",
-            bg=colors["card"],
-            fg=colors["dark_grey"]
-        ).pack(expand=True)
-
-    tk.Label(
+    spectro_caption = tk.Label(
         spectro_content,
-        text="Spectrophotometer Reading",
+        text="Live OD  (press COLLECT OD to record a point)",
         bg=colors["card"],
         fg=colors["dark_grey"],
         font=("Arial", 11)
-    ).pack()
+    )
+    spectro_caption.pack()
 
-    def update_spectrophotometer_graph():
-
-        if spectro_axis is None:
-            return
-
-        spectro_axis.clear()
-
-        spectro_axis.set_xlabel("Time (s)")
-        spectro_axis.set_ylabel("Optical Density (OD)")
-        spectro_axis.set_title("Spectrophotometer OD Over Time")
-        spectro_axis.grid(True, alpha=0.25)
-
-        if spectro_history:
-
-            start_time = spectro_history[0]["time"]
-
-            x_values = [
-                item["time"] - start_time
-                for item in spectro_history
-            ]
-
-            y_values = [
-                item["od"]
-                for item in spectro_history
-            ]
-
-            spectro_axis.plot(
-                x_values,
-                y_values,
-                marker="o",
-                linewidth=2,
-                label="OD"
-            )
-
-            spectro_axis.legend(loc="upper left")
-
-        spectro_figure.tight_layout()
-        spectro_canvas.draw_idle()
-
+    spectro_points = []
 
     def collect_spectrophotometer_od():
+        reactor_index = get_selected_reactor_index()
 
-        if not reactors:
+        if reactor_index is None or not reactors[reactor_index].history:
+            spectro_reading_label.config(text="No data")
+            spectro_caption.config(
+                text="No readings from the Arduino yet - check the reactor is connected"
+            )
             return
 
-        reactor = reactors[0]
+        reactor = reactors[reactor_index]
 
-        spectro_history.clear()
+        recent = reactor.history[-10:]
+        average_od = sum(item["od"] for item in recent) / len(recent)
 
-        for reading in reactor.history:
-            spectro_history.append({
-                "time": reading["time"],
-                "od": reading["od"]
-            })
+        recent_raw = [
+            item["od_raw"]
+            for item in recent
+            if item.get("od_raw") is not None
+        ]
+        average_raw = (
+            sum(recent_raw) / len(recent_raw) if recent_raw else None
+        )
 
-        if spectro_history:
-            latest_od = spectro_history[-1]["od"]
-            spectro_reading_label.config(
-                text=f"{latest_od:.3f}"
-            )
+        spectro_points.append({
+            "time": recent[-1]["time"],
+            "od": average_od,
+            "od_raw": average_raw
+        })
 
-        update_spectrophotometer_graph()
+        print(
+            f"Collected OD {average_od:.4f}"
+            + (f", OD Raw {average_raw:.4f}" if average_raw is not None else "")
+        )
+
+        spectro_reading_label.config(text=f"{average_od:.3f}")
+        spectro_caption.config(
+            text=f"Collected point {len(spectro_points)} "
+            f"(avg of last {len(recent)} readings)"
+        )
+
+        update_od_graph(spectro_graph, spectro_points)
 
     ttk.Button(
         spectro_content,
@@ -2326,6 +2160,8 @@ def create_dashboard(root):
         text="BACK TO DASHBOARD",
         command=lambda: notebook.select(dashboard_tab)
     ).pack()
+
+    spectro_graph = make_od_graph(spectro_content)
 
     update_calibration_status()
 
