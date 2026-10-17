@@ -22,13 +22,10 @@ float minOutput = 3500;
 float Ki = 50;
 float integral = 0;
 unsigned long prevPIDCalc = 0;
-// PID tempPID(&currentTemp, &heaterCommand, &targetTemp, Kp, Ki, Kd, DIRECT);
 int windowSize = 5000;
 unsigned long windowStartTime;
 
 bool KiMultiplied = false;
-// unsigned long time = 0;
-// bool timeSet = false;
 
 bool recovered = false;
 
@@ -49,8 +46,6 @@ void loop() {
 void TemperatureSetup() {
   pinMode(HEATER, OUTPUT);
   windowStartTime = millis();
-  // tempPID.SetOutputLimits(0, windowSize);
-  // tempPID.SetMode(AUTOMATIC);
 }
 
 float readTemperature() {
@@ -63,10 +58,6 @@ float ComputePID() {
   if (error <= 0) {
     targetReached = true;
     recovered = false;
-    // if (!timeSet) {
-    //   time = millis() / 1000;
-    //   timeSet = true;
-    // }
     integral = 0;
   }
   output += Kp * error;
@@ -121,7 +112,6 @@ void TemperatureUpdate() {
   currentTemp = (double)ds.getTempC();
   tempIncreasing = currentTemp > prevTemp;
   tempDecreasing = currentTemp < prevTemp;
-  // tempPID.Compute();
   heaterCommand = ComputePID();
   prevTemp = currentTemp;
   if (heaterCommand < 200) heaterCommand = 0;
@@ -132,8 +122,6 @@ void TemperatureUpdate() {
   Serial.print(heaterCommand);
   Serial.print(" I ");
   Serial.print(integral);
-  // Serial.print(" Time ");
-  // Serial.print(time);
   Serial.println("");
   unsigned long now = millis();
   if (now - windowStartTime > windowSize) {
@@ -142,38 +130,3 @@ void TemperatureUpdate() {
   if (heaterCommand > now - windowStartTime) digitalWrite(HEATER, HIGH);
   else digitalWrite(HEATER, LOW);
 }
-
-  // if (!targetReached && tempDecreasing) {
-  //   if (integralPending) {
-  //     if (currentTemp >= baselineTemp) {
-  //       pendingCount = 0;
-  //       integralPending = false;
-  //       integralActive = false;
-  //     } else {
-  //       pendingCount++;
-  //       Serial.print("Pending: ");
-  //       Serial.println(pendingCount);
-  //       if (pendingCount >= 5) {
-  //         Serial.println("Integral active");
-  //         integralActive = true;
-  //         pendingCount = 0;
-  //         integralPending = false;
-  //       }
-  //     }
-  //   }
-  //   if (!integralPending) {
-  //     integralPending = true;
-  //     baselineTemp = prevTemp;
-  //     Serial.println("Pending active");
-  //   }
-  // } 
-  // if (integralActive && output < windowSize) {
-  //   float currentStep = 0;
-  //   currentStep += (millis() - prevPIDCalc) * Ki;
-  //   if (currentStep < 0) currentStep = 0;
-  //   integral += currentStep;
-  //   if (integral > 750) integral = 1000;
-  //   output += integral;
-  // } else {
-  //   integral = 0;
-  // }
