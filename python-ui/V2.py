@@ -2,6 +2,7 @@
 
 # imports
 
+from operator import index
 import time
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -18,9 +19,17 @@ import random
 
 SIMULATION_MODE = False
 
-PORTS = [
-    "COM8"
-]
+PORTS = ["COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM10"]  # your 8 ports
+
+COMPONENT_FIELDS = {
+    "Temp Sensor": ["Temperature"],
+   "OD Sensor":   ["OD", "OD Raw"],
+    "pH Probe":    ["pH"],
+   "Pump":        ["Pump Active"],
+    "Fan":         ["Fan RPM"],
+}
+
+STATUS_TIMEOUT = 5.0   # seconds of silence => "NO DATA"
 
 BAUDRATE = 115200
 TEMPERATURE_WARNING_OFFSET = 2.0
@@ -46,17 +55,6 @@ class Bioreactor:
         self.blank_count = 0 
 
         self.ph = 0
-        # self.ph_control = {
-        #     "initial_volume_ml": 0.0,
-        #     "current_volume_ml": 0.0,
-        #     "acid_moles": 0.0,
-        #     "base_moles": 0.0,
-        #     "acid_additions_ml": 0.0,
-        #     "base_additions_ml": 0.0,
-        #     "target_ph": 7.0,
-        #     "acid_type": None,
-        #     "base_type": None
-        # }    
         self.ph_control = {
             "initial_volume_ml": 0.0,
             "current_volume_ml": 0.0,
@@ -90,6 +88,15 @@ class Bioreactor:
             "Input Pump 2": 50,
             "Output Pump 1": 50
         }
+
+        self.last_rx = None  
+        self.field_last_seen = {} 
+        self.pump_power = 50
+        self.ph_inputs = {"pump1_ph": "7.0", "pump2_ph": "7.0",
+                          "initial_ph": "7.0", "initial_volume": "1000"}
+        self.od_normalized = False
+        self.calibration = {"blank": False, "vial": False, "reference": False}
+        self.spectro_points = []
 
 # connecting to COM ports
 
@@ -175,6 +182,12 @@ def parse_data(reactor_number, line):
 
         if not isinstance(data, dict):
             raise ValueError("JSON data is not a dictionary")
+
+        reactor.last_rx = time.time()
+
+        for key, value in data.items():
+            if value is not None:
+               reactor.field_last_seen[key] = reactor.last_rx
 
         if "time" in data:
             reactor.time = data["time"]
@@ -426,6 +439,12 @@ def send_text_command(reactor_number, text): # send raw text command
         print(f"Failed to send command: {e}")
         return False
 
+def get_reactor_by_port(port):
+    for r in reactors:
+        if r.port == port:
+            return r
+    return None
+
 # create dashboard
 
 def create_dashboard(root):
@@ -545,12 +564,8 @@ def create_dashboard(root):
     notebook.add(setup_tab, text="OD Calibration")
     notebook.add(temperature_tab, text="Temperature Graph")
     notebook.add(spectrophotometer_tab, text="Spectrophotometer")
-
-    calibration_steps = {
-        "blank": False,
-        "vial": False,
-        "reference": False
-    }
+    status_tab = ttk.Frame(notebook, padding=15)
+    notebook.add(status_tab, text="Status")
 
     temperature_commands = {}
 
@@ -562,11 +577,17 @@ def create_dashboard(root):
         )
         return "calibrate" if answer else "cancel"
 
+    def current_calibration():
+        index = get_selected_reactor_index()
+        return reactors[index].calibration if index is not None else None
+
     def calibration_complete():
-        return all(calibration_steps.values())
+        steps = current_calibration()
+        return steps is not None and all(steps.values())
 
     def update_calibration_status():
-        completed = sum(calibration_steps.values())
+        steps = current_calibration()
+        completed = sum(steps.values()) if steps else 0
 
         if completed == 3:
             calibration_status.config(
@@ -578,6 +599,48 @@ def create_dashboard(root):
                 text=f"OD Calibration: {completed}/3 complete",
                 foreground=colors["orange"]
             )
+
+    def collect_vial_od():
+        steps = current_calibration()
+        if steps is None:
+            return
+        print("Collecting OD with empty vial")
+        steps["vial"] = True
+        vial_od_button.config(state="disabled", text="✓ Vial OD collected")
+        update_calibration_status()
+
+    def reference_collection():
+        steps = current_calibration()
+        if steps is None:
+            return
+        print("Starting reference collection")
+        steps["reference"] = True
+        reference_button.config(state="disabled", text="✓ Reference collected")
+        update_calibration_status()
+
+    def refresh_calibration_ui():
+        index = get_selected_reactor_index()
+        if index is None:
+            return
+        reactor = reactors[index]
+        steps = reactor.calibration
+
+        blank_od_button.config(
+            state="normal",
+            text=("✓ Blank collected (plain media) - press again to redo"
+                  if reactor.blank_set else
+                  "Collect OD of blank vial with no vial (nothing in the vial holder)")
+        )
+        vial_od_button.config(
+            state="disabled" if steps["vial"] else "normal",
+            text=("✓ Vial OD collected" if steps["vial"] else
+                  "Collect OD with vial inside bioreactor with nothing in the vial")
+        )
+        reference_button.config(
+            state="disabled" if steps["reference"] else "normal",
+            text="✓ Reference collected" if steps["reference"] else "Reference Collection"
+        )
+        update_calibration_status()
 
     def require_calibration():
         if calibration_complete():
@@ -618,7 +681,6 @@ def create_dashboard(root):
         )
 
     def check_blank_status():
-        # shows the blank as done once the Arduino confirms it
         reactor_index = get_selected_reactor_index()
 
         if reactor_index is None:
@@ -643,10 +705,14 @@ def create_dashboard(root):
                 return
 
             else:
+                blank_od_button.config(
+                    state="disabled",
+                    text="Collecting blank... keep the vial still"
+                )
                 return
 
-        if reactor.blank_set and not calibration_steps["blank"]:
-            calibration_steps["blank"] = True
+        if reactor.blank_set and not reactor.calibration["blank"]:
+            reactor.calibration["blank"] = True
             update_calibration_status()
 
         if reactor.blank_set:
@@ -656,24 +722,6 @@ def create_dashboard(root):
             )
         else:
             blank_od_button.config(state="normal")
-
-    def collect_vial_od():
-        print("Collecting OD with empty vial")
-        calibration_steps["vial"] = True
-        vial_od_button.config(
-            state="disabled",
-            text="✓ Vial OD collected"
-        )
-        update_calibration_status()
-
-    def reference_collection():
-        print("Starting reference collection")
-        calibration_steps["reference"] = True
-        reference_button.config(
-            state="disabled",
-            text="✓ Reference collected"
-        )
-        update_calibration_status()
 
     header = tk.Frame(
         dashboard_tab,
@@ -1265,17 +1313,26 @@ def create_dashboard(root):
 
     pumps_running = set()
 
-    def stop_pumps():
-        pumps_running.clear()
-        print("STOP PUMPS")
+    def stop_pumps(all_reactors=False):
+        if all_reactors:
+            indexes = list(range(len(reactors)))
+        else:
+            index = get_selected_reactor_index()
+            if index is None:
+                return
+            indexes = [index]
 
-        for reactor_index in range(len(connections)):
+        for reactor_index in indexes:
+            pumps_running.discard(reactor_index)
             send_command(
                 reactor_index,
                 input_pump1=0,
                 input_pump2=0,
                 output_pump1=0
             )
+
+        print("STOP PUMPS", "(all reactors)" if all_reactors
+              else f"(reactor {indexes[0] + 1})")
 
         pump_live_status.config(
             text="Pumps: STOPPED",
@@ -1291,6 +1348,12 @@ def create_dashboard(root):
             return
 
         reactor_index = int(reactor_index) - 1
+
+        if reactor_index >= len(reactors):
+            print("Reactor not connected.")
+            return
+
+        reactors[reactor_index].pump_power = power
 
         pumps_running.add(reactor_index)
 
@@ -1356,10 +1419,15 @@ def create_dashboard(root):
     def pump_slider_released(event=None):
         reactor_index = get_selected_reactor_index()
 
-        if reactor_index is None or reactor_index not in pumps_running:
+        if reactor_index is None:
             return
 
         power = pump_power.get()
+        reactors[reactor_index].pump_power = power
+
+        if reactor_index not in pumps_running:
+            return
+
         send_command(
             reactor_index,
             input_pump1=power,
@@ -1517,6 +1585,12 @@ def create_dashboard(root):
         expand=True,
         padx=(5, 0)
     )
+
+    ttk.Button(
+        pump_controls_frame,
+        text="STOP ALL REACTORS' PUMPS",
+        command=lambda: stop_pumps(all_reactors=True)
+    ).pack(fill="x", pady=(0, 5))
 
     def get_selected_reactor_index():
         value = reactor_choice.get().split()[-1]
@@ -1790,20 +1864,55 @@ def create_dashboard(root):
         if current_tab == str(temperature_tab):
             update_temperature_graph()
         elif current_tab == str(spectrophotometer_tab):
-            update_od_graph(spectro_graph, spectro_points)
+            update_od_graph(spectro_graph, selected_spectro_points())
         elif current_tab == str(setup_tab):
             update_od_graph(calibration_graph)
 
         root.after(500, update_dashboard)
 
+    shown_reactor = {"index": 0}
+
     def reactor_changed(event=None):
-        reactor_index = get_selected_reactor_index()
+        new_index = get_selected_reactor_index()
 
-        if reactor_index is not None and reactor_index < len(reactors):
-            target_temperature.set(
-                reactors[reactor_index].targets["Temperature"]
-            )
+        if new_index is None:
+            return
 
+        # save the reactor we're leaving
+        old = reactors[shown_reactor["index"]]
+        old.ph_inputs = {
+            "pump1_ph": inlet_pump1_ph.get(),
+            "pump2_ph": inlet_pump2_ph.get(),
+            "initial_ph": initial_ph.get(),
+            "initial_volume": initial_volume_ml.get()
+        }
+        old.od_normalized = od_normalized.get()
+
+        # load the reactor we're entering
+        r = reactors[new_index]
+        inlet_pump1_ph.set(r.ph_inputs["pump1_ph"])
+        inlet_pump2_ph.set(r.ph_inputs["pump2_ph"])
+        initial_ph.set(r.ph_inputs["initial_ph"])
+        initial_volume_ml.set(r.ph_inputs["initial_volume"])
+        od_normalized.set(r.od_normalized)
+
+        target_temperature.set(r.targets["Temperature"])
+        pump_power.set(r.pump_power)
+        pump_power_label.config(text=f"Pump Power: {r.pump_power}%")
+
+        refresh_calibration_ui()
+
+        points = r.spectro_points
+        spectro_reading_label.config(
+            text=f"{points[-1]['od']:.3f}" if points else "--"
+        )
+        spectro_caption.config(
+            text=(f"Collected point {len(points)}" if points else
+                  "Live OD  (press COLLECT OD to record a point)")
+        )
+
+        shown_reactor["index"] = new_index
+        
     reactor_menu.bind("<<ComboboxSelected>>", reactor_changed)
 
     # initial od setup
@@ -2103,7 +2212,9 @@ def create_dashboard(root):
     )
     spectro_caption.pack()
 
-    spectro_points = []
+    def selected_spectro_points():
+        index = get_selected_reactor_index()
+        return reactors[index].spectro_points if index is not None else []
 
     def collect_spectrophotometer_od():
         reactor_index = get_selected_reactor_index()
@@ -2117,6 +2228,8 @@ def create_dashboard(root):
 
         reactor = reactors[reactor_index]
 
+        points = reactor.spectro_points
+
         recent = reactor.history[-10:]
         average_od = sum(item["od"] for item in recent) / len(recent)
 
@@ -2129,7 +2242,7 @@ def create_dashboard(root):
             sum(recent_raw) / len(recent_raw) if recent_raw else None
         )
 
-        spectro_points.append({
+        points.append({
             "time": recent[-1]["time"],
             "od": average_od,
             "od_raw": average_raw
@@ -2142,11 +2255,11 @@ def create_dashboard(root):
 
         spectro_reading_label.config(text=f"{average_od:.3f}")
         spectro_caption.config(
-            text=f"Collected point {len(spectro_points)} "
+            text=f"Collected point {len(points)} "
             f"(avg of last {len(recent)} readings)"
         )
 
-        update_od_graph(spectro_graph, spectro_points)
+        update_od_graph(spectro_graph, points)
 
     ttk.Button(
         spectro_content,
@@ -2191,6 +2304,87 @@ def create_dashboard(root):
         else:
 
             reactor.temperature_warning = False
+
+    # status tab
+    status_header = tk.Frame(status_tab, bg=colors["navy"], padx=20, pady=15)
+    status_header.pack(fill="x", pady=(0, 15))
+    tk.Label(status_header, text="REACTOR STATUS", bg=colors["navy"],
+             fg="white", font=("Arial", 18, "bold")).pack(side="left")
+
+    status_grid = tk.Frame(status_tab, bg=colors["background"])
+    status_grid.pack(fill="both", expand=True)
+    for c in range(4):
+        status_grid.grid_columnconfigure(c, weight=1, uniform="col")
+    for r_ in range(2):
+        status_grid.grid_rowconfigure(r_, weight=1, uniform="row")
+
+    tiles = []
+    for i, port in enumerate(PORTS):
+        card = tk.Frame(status_grid, bg=colors["card"], padx=12, pady=10,
+                        highlightthickness=2, highlightbackground=colors["grey"])
+        card.grid(row=i // 4, column=i % 4, sticky="nsew", padx=6, pady=6)
+
+        tk.Label(card, text=f"Reactor {i + 1}  ({port})", bg=colors["card"],
+                 fg=colors["navy"], font=("Arial", 12, "bold")).pack(anchor="w")
+        conn = tk.Label(card, text="● NOT CONNECTED", bg=colors["card"],
+                        fg=colors["dark_grey"], font=("Arial", 10, "bold"))
+        conn.pack(anchor="w", pady=(2, 6))
+
+        comp_labels = {}
+        for name in COMPONENT_FIELDS:
+            lbl = tk.Label(card, text=f"● {name}: --", bg=colors["card"],
+                           fg=colors["dark_grey"], font=("Arial", 9))
+            lbl.pack(anchor="w")
+            comp_labels[name] = lbl
+
+        dev = tk.Label(card, text="Temp vs target: --", bg=colors["card"],
+                       fg=colors["dark_grey"], font=("Arial", 9))
+        dev.pack(anchor="w", pady=(6, 0))
+
+        tiles.append({"port": port, "card": card, "conn": conn,
+                      "comps": comp_labels, "dev": dev})
+
+    def component_state(r, fields, now):
+        seen = [r.field_last_seen[f] for f in fields if f in r.field_last_seen]
+        if not seen:
+            return "--"
+        return "OK" if now - max(seen) < STATUS_TIMEOUT else "NO DATA"
+
+    def update_status_tab():
+        now = time.time()
+        for t in tiles:
+            r = get_reactor_by_port(t["port"])
+            if r is None:
+                t["conn"].config(text="● NOT CONNECTED", fg=colors["dark_grey"])
+                t["card"].config(highlightbackground=colors["grey"])
+                continue
+
+            if r.last_rx and now - r.last_rx < STATUS_TIMEOUT:
+                t["conn"].config(text="● CONNECTED", fg=colors["green"])
+                border = colors["green"]
+            elif r.last_rx:
+                t["conn"].config(text="● NO DATA", fg=colors["orange"])
+                border = colors["orange"]
+            else:
+                t["conn"].config(text="● WAITING", fg=colors["orange"])
+                border = colors["orange"]
+
+            for name, lbl in t["comps"].items():
+                state = component_state(r, COMPONENT_FIELDS[name], now)
+                color = (colors["green"] if state == "OK"
+                         else colors["dark_grey"] if state == "--"
+                         else colors["red"])
+                lbl.config(text=f"● {name}: {state}", fg=color)
+                if state == "NO DATA":
+                    border = colors["red"]
+            t["card"].config(highlightbackground=border)
+
+            t["dev"].config(
+                text=f"Temp vs target: {r.temp - r.targets['Temperature']:+.1f} °C")
+
+        root.after(1000, update_status_tab)
+
+    update_status_tab()
 
     update_dashboard()
 
